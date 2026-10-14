@@ -13,6 +13,16 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: str = "http://localhost:5173"
 
+    # LLM（OpenAI 兼容接口；密钥一律走环境变量，不进仓库）
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_model: str = "gpt-4o-mini"
+    llm_timeout_seconds: int = 120
+
+    # 工作流
+    workflow_score_threshold: int = 80
+    workflow_max_iterations: int = 3
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
