@@ -4,7 +4,19 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.core.auth import require_admin, require_user
 from app.db.base import Base
+from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def bypass_api_auth():
+    """API 测试默认以普通用户/管理员身份通过路由级鉴权。"""
+    app.dependency_overrides[require_user] = lambda: type("TestUser", (), {"id": "u-test", "role": "user"})()
+    app.dependency_overrides[require_admin] = lambda: type("TestAdmin", (), {"id": "u-admin", "role": "admin"})()
+    yield
+    app.dependency_overrides.pop(require_user, None)
+    app.dependency_overrides.pop(require_admin, None)
 
 
 class FakeLLM:

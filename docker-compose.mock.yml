@@ -1,0 +1,14 @@
+# Mock 模式覆盖文件：无真实 LLM Key 时做端到端验证/演示。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build
+services:
+  mock-llm:
+    container_name: opw-mock-llm
+    build: ./backend
+    command: python mock/mock_llm_server.py
+    ports:
+      - "8001:8001"
+
+  backend:
+    environment:
+      LLM_API_KEY: mock-key
+      LLM_BASE_URL: http://mock-llm:8001/v1

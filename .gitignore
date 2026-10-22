@@ -18,3 +18,9 @@ dist/
 .idea/
 .vscode/
 *.log
+
+# Python cache
+
+# Temp screenshots
+.pytest_cache/
+temp-*.png

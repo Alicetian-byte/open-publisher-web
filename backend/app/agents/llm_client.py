@@ -6,10 +6,12 @@
 
 import json
 import re
+from collections.abc import Iterator
 
 from openai import OpenAI
 
 from app.core.config import get_settings
+from app.services.model_profile_service import resolve_llm_config
 
 
 class LLMError(Exception):
@@ -39,18 +41,29 @@ class LLMClient:
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
+        timeout_seconds: int | None = None,
     ) -> None:
         settings = get_settings()
-        self._api_key = api_key if api_key is not None else settings.llm_api_key
-        self._base_url = base_url if base_url is not None else settings.llm_base_url
-        self.model = model if model is not None else settings.llm_model
-        self.timeout_seconds = settings.llm_timeout_seconds
+        resolved = resolve_llm_config()
+        self.profile_id = resolved.get("profileId")
+        self.profile_name = resolved.get("profileName")
+        self._api_key = api_key if api_key is not None else resolved["api_key"]
+        self._base_url = base_url if base_url is not None else resolved["base_url"]
+        self.model = model if model is not None else resolved["model"]
+        self.timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else resolved["timeout_seconds"]
+        )
         self.call_count = 0
         self._client = OpenAI(
             api_key=self._api_key or "sk-not-configured",
             base_url=self._base_url,
             timeout=self.timeout_seconds,
         )
+
+    @property
+    def api_key_configured(self) -> bool:
+        """激活档案或环境变量是否提供了 API Key。"""
+        return bool(self._api_key)
 
     def complete(
         self,
@@ -60,23 +73,115 @@ class LLMClient:
         json_mode: bool = False,
         temperature: float = 0.7,
     ) -> str:
-        kwargs: dict = {}
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
+        """返回完整文本；正文场景内部使用流式，JSON 场景保持非流式。"""
+        return "".join(self.stream_complete(
+            system, user, json_mode=json_mode, temperature=temperature,
+        ))
+
+    def stream_complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.7,
+    ) -> Iterator[str]:
+        """逐段返回模型输出；JSON 输出仍一次性返回，便于统一解析。"""
         try:
-            response = self._client.chat.completions.create(
+            if json_mode:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                )
+                self.call_count += 1
+                content = response.choices[0].message.content or ""
+                if content:
+                    yield content
+                return
+
+            # 只要服务端持续返回增量，长文生成就不会触发单次 HTTP 读超时。
+            stream = self._client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
                 temperature=temperature,
-                **kwargs,
+                stream=True,
             )
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                content = getattr(delta, "content", None)
+                if content:
+                    yield content
+            self.call_count += 1
         except Exception as exc:  # noqa: BLE001 - 统一转为 LLMError
             raise LLMError(f"LLM 调用失败：{exc}") from exc
-        self.call_count += 1
-        return response.choices[0].message.content or ""
+
+    def stream_chat(
+        self,
+        system: str,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+    ) -> Iterator[dict]:
+        """Agent 工具循环专用：流式对话，支持 function calling。
+
+        逐段产出：
+        - {"type": "text", "delta": str}   内容增量（实时转发给事件流）
+        - {"type": "message", "content": str, "toolCalls": [...]}  最终消息
+
+        toolCalls 元素：{"id", "name", "arguments"}（arguments 为原始 JSON 字符串）。
+        """
+        request_messages = [{"role": "system", "content": system}, *messages]
+        kwargs: dict = {
+            "model": self.model,
+            "messages": request_messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        try:
+            stream = self._client.chat.completions.create(**kwargs)
+            content_parts: list[str] = []
+            tool_calls: dict[int, dict] = {}
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                content = getattr(delta, "content", None)
+                if content:
+                    content_parts.append(content)
+                    yield {"type": "text", "delta": content}
+                for fragment in getattr(delta, "tool_calls", None) or []:
+                    slot = tool_calls.setdefault(
+                        fragment.index,
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    if fragment.id:
+                        slot["id"] = fragment.id
+                    if fragment.function and fragment.function.name:
+                        slot["name"] = fragment.function.name
+                    if fragment.function and fragment.function.arguments:
+                        slot["arguments"] += fragment.function.arguments
+            self.call_count += 1
+            ordered = [tool_calls[i] for i in sorted(tool_calls)]
+            yield {
+                "type": "message",
+                "content": "".join(content_parts),
+                "toolCalls": ordered,
+            }
+        except Exception as exc:  # noqa: BLE001 - 统一转为 LLMError
+            raise LLMError(f"LLM 调用失败：{exc}") from exc
 
     def complete_json(
         self, system: str, user: str, *, temperature: float = 0.7

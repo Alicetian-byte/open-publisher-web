@@ -1,0 +1,455 @@
+import {
+  Bold,
+  Heading2,
+  ImagePlus,
+  Italic,
+  List,
+  MoreHorizontal,
+  Quote,
+  WandSparkles,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { MarkdownPreview } from "./MarkdownPreview";
+
+/**
+ * Web 版 MarkdownWorkbench（蓝本 MarkdownWorkbench 的完整迁移，团队自有）：
+ * - 格式工具栏（标题/粗体/斜体/列表/引用/插图/分隔线）
+ * - 行号槽 + 分栏比例滚动同步（双向）
+ * - 图片拖拽 / 粘贴导入（onImageFileDrop 上传后插入光标处）
+ * - 选中文本浮出「AI 修改选中内容」
+ * - 底部状态栏（脏状态 / 行数 / 字数 / 导入进度）
+ */
+
+export type EditorMode = "edit" | "split" | "preview";
+export type PreviewPlatform = "general" | "twitter" | "xiaohongshu" | "wechat";
+
+export interface MarkdownSelection {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface ImageInsertion {
+  alt: string;
+  src: string;
+}
+
+interface SelectionActionPosition {
+  left: number;
+  top: number;
+}
+
+interface MarkdownWorkbenchProps {
+  markdown: string;
+  onMarkdownChange: (markdown: string) => void;
+  dirty: boolean;
+  editorMode: EditorMode;
+  onEditorModeChange: (mode: EditorMode) => void;
+  onImageFileDrop?: (file: File) => Promise<ImageInsertion>;
+  pendingImageInsertion?: string | null;
+  onPendingImageInsertionHandled?: () => void;
+  streaming?: boolean;
+  previewPlatform?: PreviewPlatform;
+  onPreviewPlatformChange?: (platform: PreviewPlatform) => void;
+  onRequestSelectionRewrite?: (selection: MarkdownSelection) => void;
+}
+
+const editorModes: Array<{ id: EditorMode; label: string }> = [
+  { id: "edit", label: "仅编辑" },
+  { id: "split", label: "编辑与预览" },
+  { id: "preview", label: "仅预览" },
+];
+
+type ScrollablePane = HTMLTextAreaElement | HTMLDivElement;
+
+function syncScrollPosition(source: ScrollablePane, target: ScrollablePane): number | null {
+  const sourceMaximum = Math.max(0, source.scrollHeight - source.clientHeight);
+  const targetMaximum = Math.max(0, target.scrollHeight - target.clientHeight);
+  const progress = sourceMaximum > 0 ? Math.min(1, Math.max(0, source.scrollTop / sourceMaximum)) : 0;
+  const nextScrollTop = progress * targetMaximum;
+  if (Math.abs(target.scrollTop - nextScrollTop) > 0.5) {
+    target.scrollTop = nextScrollTop;
+    return nextScrollTop;
+  }
+  return null;
+}
+
+function positionSelectionAction(editor: HTMLTextAreaElement): SelectionActionPosition {
+  const selectionEnd = editor.selectionEnd;
+  const doc = editor.ownerDocument;
+  const mirror = doc.createElement("div");
+  const marker = doc.createElement("span");
+  const computed = window.getComputedStyle(editor);
+  const rect = editor.getBoundingClientRect();
+  const copiedStyles = [
+    "boxSizing", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "lineHeight",
+    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTopWidth",
+    "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "tabSize", "textTransform",
+    "wordSpacing",
+  ] as const;
+  Object.assign(mirror.style, {
+    position: "fixed", visibility: "hidden", overflow: "hidden", whiteSpace: "pre-wrap",
+    overflowWrap: "break-word", wordBreak: "break-word",
+    top: `${rect.top - editor.scrollTop}px`, left: `${rect.left - editor.scrollLeft}px`,
+    width: `${editor.clientWidth}px`,
+  });
+  copiedStyles.forEach((property) => {
+    (mirror.style as unknown as Record<string, string>)[property] = computed[property];
+  });
+  mirror.textContent = editor.value.slice(0, selectionEnd);
+  marker.textContent = editor.value.slice(selectionEnd, selectionEnd + 1) || "\u200b";
+  mirror.append(marker);
+  doc.body.append(mirror);
+  const markerRect = marker.getBoundingClientRect();
+  mirror.remove();
+  return {
+    left: Math.max(8, Math.min(markerRect.right + 10, window.innerWidth - 205)),
+    top: Math.max(8, Math.min(markerRect.bottom + 10, window.innerHeight - 42)),
+  };
+}
+
+export function MarkdownWorkbench({
+  markdown,
+  onMarkdownChange,
+  dirty,
+  editorMode,
+  onEditorModeChange,
+  onImageFileDrop,
+  pendingImageInsertion,
+  onPendingImageInsertionHandled,
+  streaming = false,
+  previewPlatform = "general",
+  onPreviewPlatformChange,
+  onRequestSelectionRewrite,
+}: MarkdownWorkbenchProps) {
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const selectionRef = useRef({ start: 0, end: 0 });
+  const scrollSourceRef = useRef<"editor" | "preview">("editor");
+  const synchronizedScrollTopsRef = useRef<Record<"editor" | "preview", number | null>>({
+    editor: null,
+    preview: null,
+  });
+  const [isDroppingImage, setIsDroppingImage] = useState(false);
+  const [isDropTarget, setIsDropTarget] = useState(false);
+  const [imageDropError, setImageDropError] = useState<string | null>(null);
+  const [selectedText, setSelectedText] = useState<MarkdownSelection | null>(null);
+  const [selectionActionPosition, setSelectionActionPosition] = useState<SelectionActionPosition | null>(null);
+  const lines = markdown.split("\n").length;
+  const characters = markdown.replace(/\s/g, "").length;
+
+  const applyMarkup = (prefix: string, suffix = prefix, placeholder = "文本") => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    selectionRef.current = { start, end };
+    const selected = markdown.slice(start, end) || placeholder;
+    onMarkdownChange(`${markdown.slice(0, start)}${prefix}${selected}${suffix}${markdown.slice(end)}`);
+    window.requestAnimationFrame(() => {
+      editor.focus();
+      editor.setSelectionRange(start + prefix.length, start + prefix.length + selected.length);
+    });
+  };
+
+  const insertBlock = (prefix: string, placeholder: string) => applyMarkup(prefix, "", placeholder);
+
+  const insertAtSelection = (value: string) => {
+    const editor = editorRef.current;
+    const start = editor ? editor.selectionStart : selectionRef.current.start;
+    const end = editor ? editor.selectionEnd : selectionRef.current.end;
+    const before = markdown.slice(0, start);
+    const after = markdown.slice(end);
+    const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
+    const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
+    onMarkdownChange(`${before}${prefix}${value}${suffix}${after}`);
+    selectionRef.current = { start: start + prefix.length + value.length, end: start + prefix.length + value.length };
+    window.requestAnimationFrame(() => {
+      if (!editor) return;
+      editor.focus();
+      const position = start + prefix.length + value.length;
+      editor.setSelectionRange(position, position);
+    });
+  };
+
+  useEffect(() => {
+    if (!pendingImageInsertion) return;
+    insertAtSelection(pendingImageInsertion);
+    onPendingImageInsertionHandled?.();
+    // 选中位置在对话框获得焦点前被捕获，这里刻意只在插入标记变化时执行。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingImageInsertion]);
+
+  const importFiles = async (files: File[]) => {
+    if (!onImageFileDrop) {
+      setImageDropError("图片导入服务尚未连接。");
+      return;
+    }
+    const images = files.filter((file) => file.type.startsWith("image/"));
+    if (!images.length) {
+      setImageDropError("只能拖入图片文件。");
+      return;
+    }
+    setIsDroppingImage(true);
+    setImageDropError(null);
+    try {
+      const inserted = await Promise.all(images.map((file) => onImageFileDrop(file)));
+      insertAtSelection(inserted.map(({ alt, src }) => `![${alt}](${src})`).join("\n\n"));
+    } catch (error) {
+      setImageDropError(error instanceof Error ? error.message : "图片导入失败，请重试。");
+    } finally {
+      setIsDroppingImage(false);
+    }
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLTextAreaElement>) => {
+    event.preventDefault();
+    setIsDropTarget(false);
+    void importFiles(Array.from(event.dataTransfer.files));
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (!images.length) return;
+    event.preventDefault();
+    void importFiles(images);
+  };
+
+  const captureSelection = (editor: HTMLTextAreaElement) => {
+    const selection = {
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+      text: markdown.slice(editor.selectionStart, editor.selectionEnd),
+    };
+    selectionRef.current = selection;
+    const next = selection.text.trim() ? selection : null;
+    setSelectedText(next);
+    setSelectionActionPosition(next ? positionSelectionAction(editor) : null);
+  };
+
+  const updateSelectionActionPosition = (editor: HTMLTextAreaElement) => {
+    if (!selectedText?.text.trim()) return;
+    setSelectionActionPosition(positionSelectionAction(editor));
+  };
+
+  const syncPaneScroll = (source: ScrollablePane, target: ScrollablePane, targetKey: "editor" | "preview") => {
+    const synchronizedTop = syncScrollPosition(source, target);
+    if (synchronizedTop !== null) {
+      synchronizedScrollTopsRef.current[targetKey] = synchronizedTop;
+    }
+  };
+
+  const consumesSynchronizedScroll = (pane: "editor" | "preview", element: ScrollablePane) => {
+    const expectedTop = synchronizedScrollTopsRef.current[pane];
+    if (expectedTop === null) return false;
+    synchronizedScrollTopsRef.current[pane] = null;
+    return Math.abs(element.scrollTop - expectedTop) <= 0.5;
+  };
+
+  const syncPreviewToEditorScroll = (editor: HTMLTextAreaElement) => {
+    const preview = previewRef.current;
+    if (editorMode === "split" && preview) {
+      if (consumesSynchronizedScroll("editor", editor)) return;
+      scrollSourceRef.current = "editor";
+      syncPaneScroll(editor, preview, "preview");
+    }
+  };
+
+  const syncEditorToPreviewScroll = (preview: HTMLDivElement) => {
+    const editor = editorRef.current;
+    if (editorMode === "split" && editor) {
+      if (consumesSynchronizedScroll("preview", preview)) return;
+      scrollSourceRef.current = "preview";
+      syncPaneScroll(preview, editor, "editor");
+    }
+  };
+
+  useEffect(() => {
+    if (editorMode !== "split") return;
+    let frame: number | null = null;
+    const syncFromActivePane = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const editor = editorRef.current;
+        const preview = previewRef.current;
+        if (!editor || !preview) return;
+        if (scrollSourceRef.current === "preview") {
+          syncPaneScroll(preview, editor, "editor");
+          return;
+        }
+        syncPaneScroll(editor, preview, "preview");
+      });
+    };
+    syncFromActivePane();
+    window.addEventListener("resize", syncFromActivePane);
+    const preview = previewRef.current;
+    const editor = editorRef.current;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(syncFromActivePane);
+    if (observer && editor && preview) {
+      observer.observe(editor);
+      observer.observe(preview);
+    }
+    return () => {
+      window.removeEventListener("resize", syncFromActivePane);
+      observer?.disconnect();
+      synchronizedScrollTopsRef.current.editor = null;
+      synchronizedScrollTopsRef.current.preview = null;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [editorMode, markdown]);
+
+  return (
+    <section aria-label="Markdown 编辑器" className="markdown-workbench">
+      <div className="editor-toolbar">
+        <div aria-label="格式工具" className="editor-toolbar__tools">
+          <button aria-label="插入标题" onClick={() => insertBlock("## ", "小节标题")} title="标题" type="button">
+            <Heading2 size={16} />
+          </button>
+          <button aria-label="切换粗体" onClick={() => applyMarkup("**")} title="粗体" type="button">
+            <Bold size={16} />
+          </button>
+          <button aria-label="切换斜体" onClick={() => applyMarkup("*")} title="斜体" type="button">
+            <Italic size={16} />
+          </button>
+          <button aria-label="插入列表" onClick={() => insertBlock("- ", "列表项")} title="列表" type="button">
+            <List size={16} />
+          </button>
+          <button aria-label="插入引用" onClick={() => insertBlock("> ", "引用内容")} title="引用" type="button">
+            <Quote size={16} />
+          </button>
+          <button aria-label="插入分隔线" onClick={() => insertBlock("\n---\n", "")} title="分隔线" type="button">
+            <MoreHorizontal size={17} />
+          </button>
+          <button aria-label="插入图片" onClick={() => insertBlock("", "")} title="图片请拖入、粘贴或用顶部「插图」按钮" type="button" style={{ display: "none" }} />
+          {onImageFileDrop && (
+            <label aria-label="插入图片" className="editor-toolbar__upload" title="插入图片">
+              <ImagePlus size={16} />
+              <input
+                accept="image/*"
+                multiple
+                onChange={(event) => {
+                  void importFiles(Array.from(event.target.files ?? []));
+                  event.target.value = "";
+                }}
+                style={{ display: "none" }}
+                type="file"
+              />
+            </label>
+          )}
+        </div>
+        <div className="editor-toolbar__right">
+          <div aria-label="编辑器布局" className="mode-switch">
+            <select
+              aria-label="编辑器布局"
+              className="mode-switch__select"
+              onChange={(event) => onEditorModeChange(event.target.value as EditorMode)}
+              value={editorMode}
+            >
+              {editorModes.map(({ id, label }) => (
+                <option key={id} value={id}>{label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className={`editor-surface editor-surface--${editorMode}`}>
+        {editorMode !== "preview" && (
+          <div className="source-editor">
+            <div aria-hidden="true" className="source-editor__gutter">
+              {Array.from({ length: lines }, (_, index) => (
+                <span key={index}>{index + 1}</span>
+              ))}
+            </div>
+            <textarea
+              aria-busy={isDroppingImage || undefined}
+              aria-label="Markdown 正文"
+              className={isDropTarget ? "is-drop-target" : undefined}
+              onChange={(event) => onMarkdownChange(event.target.value)}
+              onDragEnter={(event) => {
+                if (event.dataTransfer.types.includes("Files")) {
+                  event.preventDefault();
+                  setIsDropTarget(true);
+                }
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget === event.target) setIsDropTarget(false);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleDrop}
+              onBlur={(event) => {
+                selectionRef.current = {
+                  start: event.currentTarget.selectionStart,
+                  end: event.currentTarget.selectionEnd,
+                };
+              }}
+              onPaste={handlePaste}
+              onScroll={(event) => {
+                syncPreviewToEditorScroll(event.currentTarget);
+                updateSelectionActionPosition(event.currentTarget);
+              }}
+              onSelect={(event) => captureSelection(event.currentTarget)}
+              ref={editorRef}
+              spellCheck={false}
+              value={markdown}
+            />
+            {selectedText && selectionActionPosition && onRequestSelectionRewrite && (
+              <button
+                className="selection-rewrite-button"
+                onClick={() => {
+                  onRequestSelectionRewrite(selectedText);
+                  setSelectedText(null);
+                  setSelectionActionPosition(null);
+                }}
+                onPointerDown={(event) => event.preventDefault()}
+                style={selectionActionPosition}
+                type="button"
+              >
+                <WandSparkles size={14} /> AI 修改选中内容
+              </button>
+            )}
+          </div>
+        )}
+        {editorMode !== "edit" && (
+          <div
+            className="preview-pane"
+            onScroll={(event) => syncEditorToPreviewScroll(event.currentTarget)}
+            ref={previewRef}
+          >
+            <div className="preview-pane__meta">
+              <span>实时预览</span>
+              <select
+                aria-label="平台预览"
+                className="mode-switch__select"
+                onChange={(event) => onPreviewPlatformChange?.(event.target.value as PreviewPlatform)}
+                value={previewPlatform}
+              >
+                <option value="general">通用 Markdown</option>
+                <option value="twitter">Twitter / X</option>
+                <option value="xiaohongshu">小红书</option>
+                <option value="wechat">公众号</option>
+              </select>
+            </div>
+            <div style={{ margin: "0 auto", maxWidth: previewPlatform === "twitter" ? 560 : previewPlatform === "wechat" ? 680 : "none" }}>
+              <MarkdownPreview markdown={markdown} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <footer className="editor-status">
+        <span>
+          <i className={`status-dot${dirty ? " is-dirty" : " is-saved"}`} />
+          {dirty ? "有未保存修改" : "已保存"}
+        </span>
+        <span>{previewPlatform === "general" ? "Markdown" : `平台预览 · ${previewPlatform}`}</span>
+        <span>{lines} 行</span>
+        <span>{characters} 字</span>
+        {isDroppingImage && <span className="editor-status__progress" role="status">正在导入图片</span>}
+        {streaming && <span className="editor-status__progress" role="status">写作 Agent 正在流式写入</span>}
+        {imageDropError && <span className="editor-status__error" role="alert">{imageDropError}</span>}
+      </footer>
+    </section>
+  );
+}

@@ -129,6 +129,10 @@ def stream_events(run_id: str, db: Session = Depends(get_db)):
                 index += 1
 
             status_value = publisher.current_status()
+            if status_value is None:
+                # Redis 键已过期（1 小时 TTL）：回退到 DB 中的运行状态
+                db.refresh(run)
+                status_value = run.status
             if status_value in _TERMINAL_STATUSES and not events:
                 end_event = {"eventType": "stream.end", "status": status_value}
                 yield f"data: {json.dumps(end_event, ensure_ascii=False)}\n\n"
@@ -143,6 +147,7 @@ def stream_events(run_id: str, db: Session = Depends(get_db)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 
 

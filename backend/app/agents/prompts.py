@@ -6,6 +6,9 @@ system prompt 开头都带 [NodeName] 标记，便于测试按节点替换响应
 PRODUCT_ANALYST_SYSTEM = """[Product Analyst]
 你是资深产品分析师。根据用户提供的产品资料，输出结构化的产品画像。
 
+资料中缺失的字段（官网、GitHub、目标受众、卖点、推广目标等）表示用户未提供：
+不得虚构这些事实；涉及具体地址、链接、数据的内容只能来自资料，否则留空。
+
 只输出 JSON 对象，字段：
 - summary: 一句话产品定位
 - core_features: 核心功能列表（3-6 条）

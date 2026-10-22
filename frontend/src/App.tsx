@@ -1,22 +1,159 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Menu, Plus } from "lucide-react";
+import { api } from "./api/client";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import LoginPage from "./pages/LoginPage";
+import { AvatarMenu } from "./components/AvatarMenu";
+import { useThemeSetting } from "./lib/theme";
+import ArticlesPage from "./pages/ArticlesPage";
+import CreatePage from "./pages/CreatePage";
+import AnnouncementsPage from "./pages/AnnouncementsPage";
+import TemplatesPage from "./pages/TemplatesPage";
+import MediaPage from "./pages/MediaPage";
 import ProjectsPage from "./pages/ProjectsPage";
+import SettingsPage from "./pages/SettingsPage";
+import RevisionsPage from "./pages/RevisionsPage";
+import RunPage from "./pages/RunPage";
+import {
+  AppNavigation,
+  type NavKey,
+} from "./components/AppNavigation";
+import "./blueprint.css";
+
+// 外壳布局迁移自蓝本 App.tsx 的 app-shell / app-workspace 结构（团队自有代码）。
+// 2026-10-16：导航/品牌/首页按蓝本 1:1 迁移；旧工作台保留在 /projects（未入导航）。
+
+function isCreatePathname(): boolean {
+  return ["/", "/runs/", "/projects/", "/announcements"].some((prefix) =>
+    prefix === "/" ? window.location.pathname === "/" : window.location.pathname.startsWith(prefix),
+  );
+}
+
+function Shell() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [nav, setNav] = useState<NavKey>(isCreatePathname() ? "create" : "settings");
+  const { resolved: theme, setSetting: setThemeSetting } = useThemeSetting();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [backendReady, setBackendReady] = useState(false);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (location.pathname.startsWith("/articles")) setNav("articles");
+    else if (location.pathname.startsWith("/announcements")) setNav("announcements");
+    else if (location.pathname.startsWith("/templates")) setNav("templates");
+    else if (location.pathname.startsWith("/media")) setNav("media");
+    else if (location.pathname.startsWith("/settings")) setNav("settings");
+    else if (isCreatePathname()) setNav("create");
+  }, [location.pathname]);
+
+  useEffect(() => {
+    api
+      .get("/health")
+      .then(() => setBackendReady(true))
+      .catch(() => setBackendReady(false));
+  }, []);
+
+  const handleNavigate = useCallback(
+    (next: NavKey) => {
+      if (!user && next !== "create") {
+        navigate("/login");
+        return;
+      }
+      setNav(next);
+      setMobileNavOpen(false);
+      if (next === "create") navigate("/");
+      if (next === "articles") navigate("/articles");
+      if (next === "announcements") navigate("/announcements");
+      if (next === "templates") navigate("/templates");
+      if (next === "media") navigate("/media");
+      if (next === "settings") navigate("/settings");
+    },
+    [user, navigate],
+  );
+
+  const title =
+    nav === "create"
+      ? "创作"
+      : nav === "articles"
+        ? "文章"
+        : nav === "announcements"
+          ? "公告"
+          : nav === "templates"
+            ? "模板"
+            : nav === "media"
+              ? "素材库"
+              : "设置";
+
+  return (
+    <div className="app-shell">
+      <AppNavigation
+        active={nav}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={() => setMobileNavOpen(false)}
+        onNavigate={handleNavigate}
+        onToggleTheme={() => setThemeSetting(theme === "light" ? "dark" : "light")}
+        runtimeLabel="AI 写作 · 智能配图 · 多平台草稿"
+        runtimeReady={backendReady}
+        theme={theme}
+      />
+
+      <div className="app-workspace">
+        <header className="workspace-topbar">
+          <button
+            aria-label="打开导航"
+            className="icon-button workspace-topbar__menu"
+            onClick={() => setMobileNavOpen(true)}
+            type="button"
+          >
+            <Menu size={19} />
+          </button>
+          <strong>{title}</strong>
+          <span className="workspace-topbar__spacer" />
+          {nav !== "create" && (
+            <button
+              className="button button--quiet workspace-new"
+              onClick={() => navigate("/articles?new=1")}
+              type="button"
+            >
+              <Plus size={15} />
+              新文章
+            </button>
+          )}
+          <AvatarMenu />
+        </header>
+
+        <main
+          className={`page-viewport${location.pathname === "/" ? " page-viewport--articles" : ""}`}
+          id="main-content">
+          <Routes>
+            <Route path="/" element={<CreatePage />} />
+            <Route path="/announcements" element={<AnnouncementsPage />} />
+            <Route path="/runs/:runId" element={<RunPage />} />
+            <Route path="/articles" element={<ArticlesPage />} />
+            <Route path="/templates" element={<TemplatesPage />} />
+            <Route path="/media" element={<MediaPage />} />
+            <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/projects/:projectId/revisions" element={<RevisionsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-slate-50 text-slate-900">
-        <header className="border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-            <h1 className="text-lg font-semibold">Open Publisher Web</h1>
-            <span className="text-sm text-slate-500">AI 推文创作工作台</span>
-          </div>
-        </header>
-        <main className="mx-auto max-w-5xl px-4 py-8">
-          <Routes>
-            <Route path="/" element={<ProjectsPage />} />
-          </Routes>
-        </main>
-      </div>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/*" element={<Shell />} />
+        </Routes>
+      </AuthProvider>
     </BrowserRouter>
   );
 }

@@ -42,6 +42,16 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _prompt_user_input(raw: dict) -> dict:
+    """清空值后作为 prompt 输入：缺失字段不进 prompt，避免模型看到 null 困惑。
+
+    DB 中的 input_snapshot 保留原始完整数据，这里只影响工作流状态。
+    """
+    project = raw.get("project") or {}
+    cleaned = {k: v for k, v in project.items() if v not in (None, "", [])}
+    return {"project": cleaned, "extra": raw.get("extra") or {}}
+
+
 def run_workflow(
     run_id: str,
     project_id: str,
@@ -86,7 +96,7 @@ def run_workflow(
     initial_state: dict = {
         "run_id": run_id,
         "project_id": project_id,
-        "user_input": user_input,
+        "user_input": _prompt_user_input(user_input),
         "errors": [],
         "iteration_count": 0,
         "_max_iterations": settings.workflow_max_iterations,

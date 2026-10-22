@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,13 +12,49 @@ class Settings(BaseSettings):
         "open_publisher_web?charset=utf8mb4"
     )
     redis_url: str = "redis://localhost:6379/0"
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://localhost:5174"
+
+    # 登录认证（管理站与用户站共用账号后端；令牌签名密钥用环境变量配置）
+    auth_jwt_secret: str = "dev-open-publisher-web-secret-change-me"
+    access_token_expire_minutes: int = 720
+    auth_admin_username: str = "admin"
+    auth_admin_password: str = "Admin@123456"
+    auth_admin_display_name: str = "系统管理员"
+
 
     # LLM（OpenAI 兼容接口；密钥一律走环境变量，不进仓库）
-    llm_api_key: str = ""
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
+    # 兼容 LLM_API_KEY 与 OPENAI_API_KEY 两种命名（后者为 .env.example 中的习惯写法）
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_API_KEY", "OPENAI_API_KEY"),
+    )
+    llm_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        validation_alias=AliasChoices("LLM_BASE_URL", "OPENAI_BASE_URL"),
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("LLM_MODEL", "OPENAI_MODEL"),
+    )
     llm_timeout_seconds: int = 120
+
+    # 生图链路：独立于文本 LLM，未显式配置时回退 LLM_* / OPENAI_*
+    image_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("IMAGE_API_KEY", "OPENAI_IMAGE_API_KEY"),
+    )
+    image_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("IMAGE_BASE_URL", "OPENAI_IMAGE_BASE_URL"),
+    )
+    image_model: str = Field(
+        default="gpt-image-1",
+        validation_alias=AliasChoices("IMAGE_MODEL", "OPENAI_IMAGE_MODEL"),
+    )
+    image_timeout_seconds: int = Field(
+        default=180,
+        validation_alias=AliasChoices("IMAGE_TIMEOUT_SECONDS", "OPENAI_IMAGE_TIMEOUT_SECONDS"),
+    )
 
     # 工作流
     workflow_score_threshold: int = 80
