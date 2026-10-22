@@ -42,7 +42,7 @@ services:
       VOLC_API_KEY: ${VOLC_API_KEY:-}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-open-publisher-web-secret-change-me}
       AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
-      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:-Admin@123456}
+      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:-change_me_admin_password}
     ports:
       - "8000:8000"
     depends_on:
@@ -78,5 +78,6 @@ services:
 
 volumes:
   mysql_data:
+
 
 
