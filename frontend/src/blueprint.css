@@ -1338,7 +1338,6 @@ p {
 }
 
 .creation-composer {
-  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   background: var(--surface);
@@ -8184,7 +8183,53 @@ select optgroup {
   animation: dialog-enter 160ms ease-out;
 }
 
+/* 模型选择器在创作卡片内：容器不再裁剪，菜单需要更高层级避免被后续元素遮挡 */
+.creation-composer .creation-pill-select__menu {
+  z-index: 120;
+}
+
+.creation-composer textarea {
+  border-radius: 12px;
+}
+
 .creation-pill-select__item {
+
+.creation-prompt-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 24px 0;
+}
+
+.creation-prompt-images__chip {
+  position: relative;
+  display: inline-block;
+}
+
+.creation-prompt-images__chip img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+.creation-prompt-images__chip button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  cursor: pointer;
+}
   display: flex;
   align-items: center;
   justify-content: space-between;

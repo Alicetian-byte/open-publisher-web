@@ -46,6 +46,7 @@ interface MediaAsset {
   source: string;
 }
 
+
 interface ModelProfile {
   id: string;
   name: string;
@@ -103,7 +104,6 @@ function toneInstruction(tone: Tone) {
   return toneOptions.find((option) => option.id === tone)?.instruction ?? toneOptions[0]!.instruction;
 }
 
-const DESKTOP_ONLY_TITLE = "桌面端能力，Web 版暂不支持";
 
 export default function CreatePage() {
   const navigate = useNavigate();
@@ -128,6 +128,11 @@ export default function CreatePage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
+  const [inputImages, setInputImages] = useState<string[]>([]);
+  const [promptImageImporting, setPromptImageImporting] = useState(false);
+  const projectFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const referenceFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const promptImageInputRef = useRef<HTMLInputElement | null>(null);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
 
@@ -152,6 +157,14 @@ export default function CreatePage() {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [picker]);
+
+  useEffect(() => {
+    // React 不类型化非标准目录选择属性；Chromium 需要 webkitdirectory 才能选文件夹。
+    for (const input of [projectFolderInputRef.current, referenceFolderInputRef.current]) {
+      input?.setAttribute("webkitdirectory", "");
+      input?.setAttribute("directory", "");
+    }
+  }, []);
 
 
   useEffect(() => {
@@ -193,6 +206,48 @@ export default function CreatePage() {
     setImportNote(`已并入 ${files.length} 个资料文件（事实只来自这些资料）。`);
   };
 
+  const importFolder = async (kind: "project" | "reference", files: FileList | null) => {
+    if (!files || !files.length) return;
+    const readableExtensions = new Set([".md", ".markdown", ".txt", ".text"]);
+    const candidates = Array.from(files)
+      .filter((file) => {
+        const ext = `.${file.name.split(".").pop()?.toLowerCase() ?? ""}`;
+        return readableExtensions.has(ext);
+      })
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, 40);
+    if (!candidates.length) {
+      setValidation("所选文件夹中没有可读取的文本资料（支持 md / markdown / txt）。");
+      return;
+    }
+    const texts = await Promise.all(
+      candidates.map(async (file) => `#### 来源文件夹：\`${file.name}\`\n\n${(await file.text()).replace(/\r\n?/g, "\n").trim()}`),
+    );
+    const merged = texts.join("\n\n").slice(0, 300000);
+    setReferences((current) => `${current ? `${current}\n\n` : ""}${merged}`);
+    setImportNote(`已并入${kind === "project" ? "项目" : "资料"}文件夹 ${candidates.length} 个文本文件（事实只来自这些资料）。`);
+  };
+
+  const addPromptImages = async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    setPromptImageImporting(true);
+    try {
+      const dataUrls: string[] = [];
+      for (const file of Array.from(files).slice(0, 10 - inputImages.length)) {
+        if (!file.type.startsWith("image/")) continue;
+        const buffer = await file.arrayBuffer();
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        dataUrls.push(`data:${file.type};base64,${base64}`);
+      }
+      if (dataUrls.length) {
+        setInputImages((current) => [...current, ...dataUrls].slice(0, 10));
+        setImportNote(`已添加 ${dataUrls.length} 张图片，写作模型将参考图片内容。`);
+      }
+    } finally {
+      setPromptImageImporting(false);
+    }
+  };
+
   const activateProfile = async (profileId: string) => {
     if (profileId === activeProfileId) return;
     try {
@@ -200,7 +255,7 @@ export default function CreatePage() {
       setActiveProfileId(profileId);
       setProfiles((current) => current.map((p) => ({ ...p, is_default: p.id === profileId })));
     } catch {
-      setValidation("切换模型失败，请到设置页检查模型档案。");
+      setValidation("切换模型失败，请稍后再试。");
     }
   };
 
@@ -286,7 +341,7 @@ export default function CreatePage() {
         references: references.trim() || null,
         template: selectedTemplate,
         imageAssets: selectedMediaIds,
-        inputImages: [],
+        inputImages,
         imagePlan: { targetCount: imagePlanMode === "auto" ? imageCount : 0 },
         webSearchMode,
         taskMode: "article_create",
@@ -371,6 +426,22 @@ export default function CreatePage() {
         </div>
 
         <div className="creation-composer">
+          {inputImages.length > 0 && (
+            <div aria-label="已添加图片" className="creation-prompt-images">
+              {inputImages.map((dataUrl, index) => (
+                <span className="creation-prompt-images__chip" key={index}>
+                  <img alt={`图片 ${index + 1}`} src={dataUrl} />
+                  <button
+                    aria-label={`移除图片 ${index + 1}`}
+                    onClick={() => setInputImages((current) => current.filter((_, i) => i !== index))}
+                    type="button"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <label className="visually-hidden" htmlFor={promptId}>文章主题</label>
           <textarea
             aria-invalid={validation ? "true" : undefined}
@@ -385,10 +456,10 @@ export default function CreatePage() {
             <div className="creation-composer__tools">
               <button className="text-button" onClick={() => setPicker("details")} type="button"><SlidersHorizontal size={15} />资料</button>
               <button className="text-button" onClick={() => fileInputRef.current?.click()} type="button"><FilePlus2 size={15} />导入文件</button>
-              <button className="text-button" disabled title={DESKTOP_ONLY_TITLE} type="button"><FolderOpen size={15} />项目文件夹</button>
-              <button className="text-button" disabled title={DESKTOP_ONLY_TITLE} type="button"><FolderOpen size={15} />资料文件夹</button>
+              <button className="text-button" onClick={() => projectFolderInputRef.current?.click()} type="button"><FolderOpen size={15} />项目文件夹</button>
+              <button className="text-button" onClick={() => referenceFolderInputRef.current?.click()} type="button"><FolderOpen size={15} />资料文件夹</button>
               <button className="text-button" onClick={() => setPicker("media")} type="button"><ImagePlus size={15} />{selectedMedia.length ? `素材 ${selectedMedia.length}` : "选择素材"}</button>
-              <button className="text-button" disabled title="当前 Web 版暂不支持图片输入（需要视觉模型）" type="button"><ImagePlus size={15} />添加图片</button>
+              <button className="text-button" disabled={promptImageImporting} onClick={() => promptImageInputRef.current?.click()} type="button"><ImagePlus size={15} />{promptImageImporting ? "导入图片" : "添加图片"}</button>
               <input
                 accept=".md,.markdown,.txt,text/plain,text/markdown"
                 aria-label="选择参考文件"
@@ -398,28 +469,40 @@ export default function CreatePage() {
                 ref={fileInputRef}
                 type="file"
               />
+              <input
+                aria-label="选择项目文件夹"
+                className="visually-hidden"
+                multiple
+                onChange={(event) => { void importFolder("project", event.target.files); event.currentTarget.value = ""; }}
+                ref={projectFolderInputRef}
+                type="file"
+              />
+              <input
+                aria-label="选择资料文件夹"
+                className="visually-hidden"
+                multiple
+                onChange={(event) => { void importFolder("reference", event.target.files); event.currentTarget.value = ""; }}
+                ref={referenceFolderInputRef}
+                type="file"
+              />
+              <input
+                accept="image/*"
+                aria-label="添加图片"
+                className="visually-hidden"
+                multiple
+                onChange={(event) => { void addPromptImages(event.target.files); event.currentTarget.value = ""; }}
+                ref={promptImageInputRef}
+                type="file"
+              />
             </div>
             <span className="creation-composer__summary">{templateLabel}</span>
-            <label className="creation-model-select">
-              <span className="model-chip__dot" />
-              <select
-                aria-label="写作模型"
-                className="creation-select"
-                onChange={(event) => {
-                  if (event.target.value === "__settings__") navigate("/settings");
-                  else void activateProfile(event.target.value);
-                }}
-                value={selectedProfile?.id ?? ""}
-              >
-                {profiles.length === 0 && <option value="">配置模型</option>}
-                {profiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name} · {profile.modelId}{profile.keyConfigured ? "" : "（缺少密钥）"}
-                  </option>
-                ))}
-                <option value="__settings__">添加模型...</option>
-              </select>
-            </label>
+            <PillSelect
+              ariaLabel="写作模型"
+              label="模型"
+              onChange={(value) => { void activateProfile(value); }}
+              options={profiles.length > 0 ? profiles.map((profile) => ({ id: profile.id, label: `${profile.name} · ${profile.modelId}${profile.keyConfigured ? "" : "（缺少密钥）"}` })) : [{ id: "", label: "未配置模型" }]}
+              value={selectedProfile?.id ?? ""}
+            />
             <button
               className="button button--primary"
               disabled={runStatus === "running"}

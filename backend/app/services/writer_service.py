@@ -264,10 +264,20 @@ class WriterService:
             self.journal.append(run_id, "run.started", {"operation": "article-create"})
 
             system_prompt = _load_prompt("system")
-            user_prompt = self._build_user_prompt(
+            user_prompt: str | list[dict] = self._build_user_prompt(
                 prompt=prompt, tone=tone, length_preset=length_preset,
                 custom_length=custom_length, humanize=humanize, creation=creation,
             )
+            input_images = [str(item) for item in (creation.get("inputImages") or []) if item]
+            if input_images:
+                # 多模态输入：OpenAI 兼容 content parts，图片以 data URL 附在文本后。
+                user_prompt = [
+                    {"type": "text", "text": user_prompt},
+                    *[
+                        {"type": "image_url", "image_url": {"url": data_url}}
+                        for data_url in input_images[:10]
+                    ],
+                ]
 
             if callable(getattr(self.llm, "stream_chat", None)):
                 committed = self._run_agent_loop(
@@ -672,7 +682,7 @@ class WriterService:
             sections.append("可用素材（仅在匹配时引用，不要杜撰图片内容）：\n" + "\n".join(lines))
         input_images = creation.get("inputImages") or []
         if input_images:
-            sections.append("用户提供了视觉输入；如无法读图，请明确说明，不要编造图像内容。")
+            sections.append(f"用户附了 {len(input_images)} 张图片（以多模态消息附加在本次请求中）；如无法读图，请明确说明，不要编造图像内容。")
         image_plan = creation.get("imagePlan")
         if isinstance(image_plan, dict):
             target = image_plan.get("targetCount")
@@ -706,3 +716,5 @@ class WriterService:
             return None
         detail = self.store.read_revision(article_id, state["currentRevisionId"])
         return detail["revisionNumber"] if detail else None
+
+
