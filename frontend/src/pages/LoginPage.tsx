@@ -94,6 +94,13 @@ export default function LoginPage() {
           type="button">
           {mode === "login" ? "还没有账号？注册" : "已有账号？登录"}
         </button>
+        <button
+          className="auth-switch"
+          onClick={() => navigate("/landing")}
+          type="button"
+        >
+          了解稿流 →
+        </button>
       </div>
     </main>
   );

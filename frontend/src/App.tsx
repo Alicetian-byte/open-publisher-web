@@ -4,6 +4,7 @@ import { Menu, Plus } from "lucide-react";
 import { api } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import LoginPage from "./pages/LoginPage";
+import LandingPage from "./pages/LandingPage";
 import { AvatarMenu } from "./components/AvatarMenu";
 import { useThemeSetting } from "./lib/theme";
 import ArticlesPage from "./pages/ArticlesPage";
@@ -12,6 +13,7 @@ import AnnouncementsPage from "./pages/AnnouncementsPage";
 import TemplatesPage from "./pages/TemplatesPage";
 import MediaPage from "./pages/MediaPage";
 import ProjectsPage from "./pages/ProjectsPage";
+import PublishQueuePage from "./pages/PublishQueuePage";
 import SettingsPage from "./pages/SettingsPage";
 import RevisionsPage from "./pages/RevisionsPage";
 import RunPage from "./pages/RunPage";
@@ -44,6 +46,7 @@ function Shell() {
     else if (location.pathname.startsWith("/announcements")) setNav("announcements");
     else if (location.pathname.startsWith("/templates")) setNav("templates");
     else if (location.pathname.startsWith("/media")) setNav("media");
+    else if (location.pathname.startsWith("/publish-queue")) setNav("publish");
     else if (location.pathname.startsWith("/settings")) setNav("settings");
     else if (isCreatePathname()) setNav("create");
   }, [location.pathname]);
@@ -68,6 +71,7 @@ function Shell() {
       if (next === "announcements") navigate("/announcements");
       if (next === "templates") navigate("/templates");
       if (next === "media") navigate("/media");
+      if (next === "publish") navigate("/publish-queue");
       if (next === "settings") navigate("/settings");
     },
     [user, navigate],
@@ -84,7 +88,9 @@ function Shell() {
             ? "模板"
             : nav === "media"
               ? "素材库"
-              : "设置";
+              : nav === "publish"
+                ? "发布"
+                : "设置";
 
   return (
     <div className="app-shell">
@@ -134,6 +140,7 @@ function Shell() {
             <Route path="/articles" element={<ArticlesPage />} />
             <Route path="/templates" element={<TemplatesPage />} />
             <Route path="/media" element={<MediaPage />} />
+            <Route path="/publish-queue" element={<PublishQueuePage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/projects/:projectId/revisions" element={<RevisionsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -151,6 +158,7 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/landing" element={<LandingPage />} />
           <Route path="/*" element={<Shell />} />
         </Routes>
       </AuthProvider>
