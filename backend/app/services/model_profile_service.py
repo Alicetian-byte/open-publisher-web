@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.models.settings_profile import ModelProfile
+from app.models.settings_profile import ImageConfig, ModelProfile
 
 
 def get_active_profile(db: Session, owner_user_id: str | None = None) -> ModelProfile | None:
@@ -128,3 +128,49 @@ def create_profile(
     db.commit()
     db.refresh(profile)
     return profile
+
+
+IMAGE_CONFIG_ID = "global"
+
+
+def get_image_config(db: Session) -> ImageConfig | None:
+    return db.get(ImageConfig, IMAGE_CONFIG_ID)
+
+
+def resolve_image_config(db: Session | None = None) -> dict:
+    """解析生图配置：DB 全局配置 > IMAGE_* 环境变量 > 文本 LLM 回退。
+
+    与文本 LLM 相同的密钥约定：api_key_env 只记录环境变量名，
+    运行时读取进程环境，密钥本体永不入库。
+    """
+    settings = get_settings()
+    has_env_override = bool(settings.image_api_key or settings.image_base_url)
+    config = {
+        "apiKeyEnv": "IMAGE_API_KEY",
+        "api_key": settings.image_api_key or settings.llm_api_key,
+        "base_url": settings.image_base_url or settings.llm_base_url,
+        "model": settings.image_model,
+        "timeout_seconds": settings.image_timeout_seconds or settings.llm_timeout_seconds,
+        "source": "env" if has_env_override else "fallback",
+    }
+    try:
+        if db is None:
+            with SessionLocal() as session:
+                row = session.get(ImageConfig, IMAGE_CONFIG_ID)
+        else:
+            row = db.get(ImageConfig, IMAGE_CONFIG_ID)
+        if row is not None:
+            env_value = os.environ.get(row.api_key_env, "")
+            config.update(
+                {
+                    "apiKeyEnv": row.api_key_env,
+                    "api_key": env_value or settings.image_api_key or settings.llm_api_key,
+                    "base_url": row.base_url,
+                    "model": row.model_id,
+                    "timeout_seconds": row.timeout_seconds,
+                    "source": "db",
+                }
+            )
+    except Exception:  # noqa: BLE001 - 表不存在等场景回退环境变量配置
+        return config
+    return config

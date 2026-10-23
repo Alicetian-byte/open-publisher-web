@@ -114,23 +114,23 @@ class MediaService:
         """OpenAI 兼容 images API；密钥来自环境变量。"""
         from fastapi import HTTPException
 
-        from app.core.config import get_settings
+        from app.services.model_profile_service import resolve_image_config
 
-        settings = get_settings()
-        if not (settings.image_api_key or settings.llm_api_key):
+        resolved = resolve_image_config(db=self.db)
+        if not resolved["api_key"]:
             raise HTTPException(
                 status_code=501,
-                detail="图片生成需要先在后端 .env 配置 LLM_API_KEY（密钥不进浏览器）",
+                detail="图片生成需要先在管理端配置生图模型（或后端 IMAGE_API_KEY / LLM_API_KEY）",
             )
         from openai import OpenAI
 
         client = OpenAI(
-            api_key=settings.image_api_key or settings.llm_api_key,
-            base_url=settings.image_base_url or settings.llm_base_url,
-            timeout=settings.image_timeout_seconds or settings.llm_timeout_seconds,
+            api_key=resolved["api_key"],
+            base_url=resolved["base_url"],
+            timeout=resolved["timeout_seconds"],
         )
         try:
-            result = client.images.generate(model=settings.image_model, prompt=prompt,
+            result = client.images.generate(model=resolved["model"], prompt=prompt,
                                             size=size, n=1)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"图片生成失败：{exc}") from None

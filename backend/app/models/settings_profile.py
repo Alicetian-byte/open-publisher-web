@@ -25,3 +25,23 @@ class ModelProfile(Base):
     created_at: Mapped[object] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
+
+
+class ImageConfig(Base):
+    """生图模型配置：全局单行（id 固定 "global"）。
+
+    与 ModelProfile 同一密钥约定：只存环境变量名，密钥本体
+    永不入库、不下发前端。未建行时回退 IMAGE_* 环境变量，
+    再回退文本 LLM 配置。
+    """
+
+    __tablename__ = "image_configs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    api_key_env: Mapped[str] = mapped_column(String(120), nullable=False, default="IMAGE_API_KEY")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=180)
+    updated_at: Mapped[object] = mapped_column(
+        DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )

@@ -35,9 +35,28 @@ const emptyForm = {
   timeoutSeconds: 120,
 };
 
+interface ImageStatus {
+  baseUrl: string;
+  model: string;
+  apiKeyEnv: string;
+  keyConfigured: boolean;
+  timeoutSeconds: number;
+  source: "db" | "env" | "fallback";
+}
+
+const emptyImageForm = {
+  baseUrl: "",
+  modelId: "",
+  apiKeyEnv: "IMAGE_API_KEY",
+  timeoutSeconds: 180,
+};
+
 function AiConfigPage() {
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [profiles, setProfiles] = useState<ProfileOut[]>([]);
+  const [image, setImage] = useState<ImageStatus | null>(null);
+  const [imageForm, setImageForm] = useState(emptyImageForm);
+  const [showImageForm, setShowImageForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -48,12 +67,14 @@ function AiConfigPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [statusRes, profilesRes] = await Promise.all([
+      const [statusRes, profilesRes, imageRes] = await Promise.all([
         api.get<ModelStatus>("/settings/model"),
         api.get<{ profiles: ProfileOut[] }>("/settings/profiles"),
+        api.get<ImageStatus>("/settings/image"),
       ]);
       setStatus(statusRes.data);
       setProfiles(profilesRes.data.profiles);
+      setImage(imageRes.data);
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof detail === "string" ? detail : "无法读取 AI 配置。");
@@ -123,6 +144,70 @@ function AiConfigPage() {
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof detail === "string" ? detail : "连通测试失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openImageForm = () => {
+    if (image && image.source === "db") {
+      setImageForm({
+        baseUrl: image.baseUrl,
+        modelId: image.model,
+        apiKeyEnv: image.apiKeyEnv,
+        timeoutSeconds: image.timeoutSeconds,
+      });
+    } else {
+      setImageForm(emptyImageForm);
+    }
+    setShowImageForm(true);
+  };
+
+  const saveImage = async () => {
+    if (!imageForm.baseUrl.trim() || !imageForm.modelId.trim()) {
+      setError("生图 API Base URL / 模型 ID 必填。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put<ImageStatus>("/settings/image", imageForm);
+      setShowImageForm(false);
+      await load();
+      setMessage("生图配置已保存。");
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "生图配置保存失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetImage = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete<ImageStatus>("/settings/image");
+      setShowImageForm(false);
+      await load();
+      setMessage("已恢复环境变量默认配置。");
+    } catch {
+      setError("重置失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testImage = async () => {
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const res = await api.post<{ latencyMs: number; model: string }>("/settings/image/test");
+      setMessage(`生图连通正常：${res.data.model} · ${res.data.latencyMs}ms`);
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "生图连通测试失败。");
     } finally {
       setBusy(false);
     }
@@ -206,6 +291,55 @@ function AiConfigPage() {
           ))}
           {profiles.length === 0 && <p className="muted">还没有模型档案。</p>}
         </div>
+      </section>
+
+      <section className="admin-card">
+        <div className="section-head">
+          <h2>生图模型配置</h2>
+          <div>
+            <button className="quiet" onClick={() => void load()} type="button"><RefreshCw size={14} /> 刷新</button>
+            <button className="primary" disabled={busy} onClick={() => void testImage()} type="button">
+              {busy ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试生图
+            </button>
+          </div>
+        </div>
+        {image ? (
+          <>
+            <div className="config-grid">
+              <div><small>API Base URL</small><strong>{image.baseUrl}</strong></div>
+              <div><small>模型</small><strong>{image.model}</strong></div>
+              <div><small>密钥变量</small><strong>{image.apiKeyEnv}</strong></div>
+              <div><small>密钥状态</small><strong>{image.keyConfigured ? "已配置" : "未配置"}</strong></div>
+              <div><small>配置来源</small><strong>{image.source === "db" ? "管理端配置" : image.source === "env" ? "环境变量" : "回退文本模型"}</strong></div>
+              <div><small>超时</small><strong>{image.timeoutSeconds}s</strong></div>
+            </div>
+            <div className="section-head" style={{ marginTop: 12 }}>
+              <span className="muted">密钥本体只写环境变量，不回显；留空表示沿用文本模型密钥。</span>
+              <div>
+                <button className="quiet" onClick={openImageForm} type="button">编辑配置</button>
+                {image.source === "db" && (
+                  <button className="quiet" disabled={busy} onClick={() => void resetImage()} type="button">恢复环境变量默认</button>
+                )}
+              </div>
+            </div>
+            {showImageForm && (
+              <form
+                className="admin-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveImage();
+                }}>
+                <input onChange={(e) => setImageForm({ ...imageForm, baseUrl: e.target.value })} placeholder="生图 API Base URL，例如 https://api.openai.com/v1" required value={imageForm.baseUrl} />
+                <input onChange={(e) => setImageForm({ ...imageForm, modelId: e.target.value })} placeholder="生图模型 ID，例如 gpt-image-1" required value={imageForm.modelId} />
+                <input onChange={(e) => setImageForm({ ...imageForm, apiKeyEnv: e.target.value })} placeholder="密钥环境变量名，默认 IMAGE_API_KEY" value={imageForm.apiKeyEnv} />
+                <input min={1} onChange={(e) => setImageForm({ ...imageForm, timeoutSeconds: Number(e.target.value) || 180 })} placeholder="超时秒数" type="number" value={imageForm.timeoutSeconds} />
+                <button className="primary" disabled={busy} type="submit">保存生图配置</button>
+              </form>
+            )}
+          </>
+        ) : (
+          <p className="muted">加载中...</p>
+        )}
       </section>
 
       <section className="admin-card">

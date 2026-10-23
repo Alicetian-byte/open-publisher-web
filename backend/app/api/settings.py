@@ -82,18 +82,10 @@ def model_status(db: Session = Depends(get_db), user: AppUser = Depends(require_
     }
 
 
-@router.get("/image")
-def image_status():
-    from app.core.config import get_settings
-
-    settings = get_settings()
-    return {
-        "baseUrl": settings.image_base_url or settings.llm_base_url,
-        "model": settings.image_model,
-        "keyConfigured": bool(settings.image_api_key or settings.llm_api_key),
-        "keySource": "IMAGE_API_KEY" if settings.image_api_key else "LLM_API_KEY",
-        "timeoutSeconds": settings.image_timeout_seconds,
-    }
+@router.get("/image", dependencies=[Depends(require_admin)])
+def image_status(db: Session = Depends(get_db)):
+    """管理端生图配置状态（DB > 环境变量 > 文本 LLM 回退）。"""
+    return _image_out(db)
 
 
 @router.get("/profiles")
@@ -262,3 +254,98 @@ def discover_models(db: Session = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"模型列表拉取失败：{exc}") from None
     return {"models": sorted(models)}
+
+
+class ImageConfigUpdate(BaseModel):
+    """管理端生图配置；密钥只存环境变量名，本体永不回显。"""
+
+    baseUrl: str = Field(min_length=1, max_length=500)
+    modelId: str = Field(min_length=1, max_length=200)
+    apiKeyEnv: str = Field(default="IMAGE_API_KEY", max_length=120)
+    timeoutSeconds: int = Field(default=180, ge=1, le=1800)
+
+
+def _image_out(db: Session | None = None) -> dict:
+    from app.services.model_profile_service import resolve_image_config
+
+    resolved = resolve_image_config(db)
+    return {
+        "baseUrl": resolved["base_url"],
+        "model": resolved["model"],
+        "apiKeyEnv": resolved["apiKeyEnv"],
+        "keyConfigured": bool(resolved["api_key"]),
+        "timeoutSeconds": resolved["timeout_seconds"],
+        "source": resolved["source"],
+    }
+
+
+@router.put("/image", dependencies=[Depends(require_admin)])
+def update_image_config(
+    body: ImageConfigUpdate,
+    db: Session = Depends(get_db),
+):
+    """保存全局生图配置（单行 upsert，id 固定 global）。"""
+    from app.models.settings_profile import ImageConfig
+    from app.services.model_profile_service import IMAGE_CONFIG_ID
+
+    row = db.get(ImageConfig, IMAGE_CONFIG_ID)
+    if row is None:
+        row = ImageConfig(id=IMAGE_CONFIG_ID)
+        db.add(row)
+    row.base_url = body.baseUrl.strip()
+    row.model_id = body.modelId.strip()
+    row.api_key_env = body.apiKeyEnv.strip() or "IMAGE_API_KEY"
+    row.timeout_seconds = body.timeoutSeconds
+    db.commit()
+    db.refresh(row)
+    return _image_out(db)
+
+
+@router.delete("/image", dependencies=[Depends(require_admin)])
+def reset_image_config(db: Session = Depends(get_db)):
+    """删除 DB 覆盖，回退 IMAGE_* 环境变量 / 文本 LLM 配置。"""
+    from app.models.settings_profile import ImageConfig
+    from app.services.model_profile_service import IMAGE_CONFIG_ID
+
+    row = db.get(ImageConfig, IMAGE_CONFIG_ID)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return _image_out(db)
+
+
+@router.post("/image/test", dependencies=[Depends(require_admin)])
+def test_image_config():
+    """生一张最小测试图验证生图链路连通性。"""
+    from openai import OpenAI
+
+    from app.services.model_profile_service import resolve_image_config
+
+    resolved = resolve_image_config()
+    if not resolved["api_key"]:
+        raise HTTPException(
+            status_code=501,
+            detail=f"未配置密钥：请设置环境变量 {resolved['apiKeyEnv']} 或在上方保存配置",
+        )
+    started = time.monotonic()
+    client = OpenAI(
+        api_key=resolved["api_key"],
+        base_url=resolved["base_url"],
+        timeout=resolved["timeout_seconds"],
+    )
+    try:
+        result = client.images.generate(
+            model=resolved["model"],
+            prompt="connection test: a tiny minimal blue flower, flat illustration",
+            size="256x256", n=1,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"生图调用失败：{exc}") from None
+    item = result.data[0] if result.data else None
+    if not item or not (item.b64_json or item.url):
+        raise HTTPException(status_code=502, detail="生图调用没有返回内容")
+    return {
+        "ok": True,
+        "latencyMs": int((time.monotonic() - started) * 1000),
+        "model": resolved["model"],
+    }

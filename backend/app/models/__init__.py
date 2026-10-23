@@ -6,7 +6,7 @@ from app.models.article import Article, ArticleRevision
 from app.models.template import ArticleTemplate
 from app.models.media import MediaAsset
 from app.models.assistant import AssistantMessage, AssistantSession
-from app.models.settings_profile import ModelProfile
+from app.models.settings_profile import ImageConfig, ModelProfile
 from app.models.user import AppUser
 from app.models.agent_runtime import AgentSession, AgentRun, AgentRunEvent, ToolExecution
 from app.models.publishing import (
@@ -27,6 +27,7 @@ __all__ = [
     "ArticleTemplate",
     "MediaAsset",
     "AssistantSession",
+    "ImageConfig",
     "AssistantMessage",
     "AgentSession",
     "AgentRun",

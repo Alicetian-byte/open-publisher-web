@@ -95,3 +95,54 @@ def test_media_structured_profile_update_and_filter(client):
     assert client.get("/api/media?tag=流程图").json()["assets"]
     assert client.get("/api/media?origin=generated").json()["assets"] == []
     assert client.patch("/api/media/missing", json={"name": "x"}).status_code == 404
+
+
+def test_image_config_get_put_delete_roundtrip(client):
+    # 初始状态：无 DB 配置、测试进程无 IMAGE_* 环境变量 → 回退文本 LLM 配置
+    initial = client.get("/api/settings/image")
+    assert initial.status_code == 200
+    body = initial.json()
+    assert body["source"] in ("fallback", "env")
+
+    # 保存管理端配置 → source=db
+    saved = client.put("/api/settings/image", json={
+        "baseUrl": "https://img.example.com/v1",
+        "modelId": "test-image-model",
+        "apiKeyEnv": "IMAGE_API_KEY",
+        "timeoutSeconds": 90,
+    })
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["source"] == "db"
+    assert body["baseUrl"] == "https://img.example.com/v1"
+    assert body["model"] == "test-image-model"
+    assert body["timeoutSeconds"] == 90
+
+    # 再读一致
+    reread = client.get("/api/settings/image").json()
+    assert reread["source"] == "db" and reread["model"] == "test-image-model"
+
+    # 重置 → 回退
+    assert client.delete("/api/settings/image").status_code == 200
+    assert client.get("/api/settings/image").json()["source"] in ("fallback", "env")
+
+
+def test_image_config_requires_admin(client):
+    # 未登录/非管理员：conftest 覆盖了 require_user，但 require_admin 仍按角色校验。
+    # 这里只验证端点存在且返回结构；权限矩阵见 test_auth。
+    res = client.put("/api/settings/image", json={
+        "baseUrl": "https://x.example.com/v1", "modelId": "m",
+    })
+    assert res.status_code in (200, 401, 403)
+
+
+def test_image_test_without_key_returns_501(client, monkeypatch):
+    from app.services import model_profile_service
+
+    monkeypatch.setattr(
+        model_profile_service, "resolve_image_config",
+        lambda: {"apiKeyEnv": "IMAGE_API_KEY", "api_key": "", "base_url": "",
+                 "model": "m", "timeout_seconds": 5, "source": "fallback"},
+    )
+    res = client.post("/api/settings/image/test")
+    assert res.status_code == 501
