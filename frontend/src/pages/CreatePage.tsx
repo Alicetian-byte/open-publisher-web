@@ -55,6 +55,13 @@ interface ModelProfile {
   keyConfigured: boolean;
 }
 
+interface ImageModelOption {
+  id: string;
+  name: string;
+  model: string;
+  keyConfigured: boolean;
+}
+
 interface RunEventItem {
   key: string;
   eventType: string;
@@ -135,6 +142,9 @@ export default function CreatePage() {
   const promptImageInputRef = useRef<HTMLInputElement | null>(null);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  const [imageModels, setImageModels] = useState<ImageModelOption[]>([]);
+  // 生图模型选择为非必选：留空 = 跟随系统配置（管理端生图配置 / IMAGE_* 环境变量）
+  const [selectedImageModelId, setSelectedImageModelId] = useState("");
 
   const [importNote, setImportNote] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -182,6 +192,9 @@ export default function CreatePage() {
         setActiveProfileId(list.find((p) => p.is_default)?.id ?? list[0]?.id ?? null);
       })
       .catch(() => setProfiles([]));
+    api.get<{ models: ImageModelOption[] }>("/settings/image-models")
+      .then((res) => setImageModels(res.data.models ?? []))
+      .catch(() => setImageModels([]));
     return () => {
       esRef.current?.close();
     };
@@ -189,9 +202,10 @@ export default function CreatePage() {
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
   const selectedMedia = mediaAssets.filter((asset) => selectedMediaIds.includes(asset.id));
+  const selectedImageModel = imageModels.find((m) => m.id === selectedImageModelId) ?? null;
   const imageLabel = imagePlanMode === "none"
     ? "不配图"
-    : `自动 · ${imageCount} 张`;
+    : `自动 · ${imageCount} 张${selectedImageModel ? ` · ${selectedImageModel.model}` : ""}`;
   const selectedProfile = profiles.find((p) => p.id === activeProfileId) ?? null;
   const templateLabel = selectedTemplate?.mode === "reference"
     ? `高保真参考 · ${selectedTemplate.name}`
@@ -288,6 +302,7 @@ export default function CreatePage() {
           baseRevisionId: state.data.currentRevisionId,
           baseContentHash: state.data.contentHash,
           placements: plan.data.placements,
+          imageModelId: selectedImageModelId || null,
         },
       );
       push(`配图完成：已插入 ${applied.data.insertedCount} 张${applied.data.skipped.length ? `，跳过 ${applied.data.skipped.length} 张` : ""}。`);
@@ -342,7 +357,10 @@ export default function CreatePage() {
         template: selectedTemplate,
         imageAssets: selectedMediaIds,
         inputImages,
-        imagePlan: { targetCount: imagePlanMode === "auto" ? imageCount : 0 },
+        imagePlan: {
+          targetCount: imagePlanMode === "auto" ? imageCount : 0,
+          imageModelId: selectedImageModelId || null,
+        },
         webSearchMode,
         taskMode: "article_create",
         disabledNodeIds: webSearchMode === "off" ? ["web_search"] : [],
@@ -624,6 +642,26 @@ export default function CreatePage() {
               </label>
               {imagePlanMode === "auto" && (
                 <label className="field">
+                  <span>生图模型（可选）</span>
+                  <select
+                    className="creation-select"
+                    onChange={(event) => setSelectedImageModelId(event.target.value)}
+                    value={selectedImageModelId}
+                  >
+                    <option value="">跟随系统配置（默认）</option>
+                    {imageModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name} · {model.model}{model.keyConfigured ? "" : "（缺少密钥）"}
+                      </option>
+                    ))}
+                  </select>
+                  {imageModels.length === 0 && (
+                    <small>暂无已配置生图模型；未在管理端配置生图时无法自动生成图片。</small>
+                  )}
+                </label>
+              )}
+              {imagePlanMode === "auto" && (
+                <label className="field">
                   <span>目标图片数量</span>
                   <input
                     aria-label="目标图片数量"
@@ -644,7 +682,7 @@ export default function CreatePage() {
                   />
                 </label>
               )}
-              <small>当前 Web 版由后端在创作流程中自动决定配图；此处选择会随创作要求一并发送。</small>
+              <small>当前 Web 版由后端在创作流程中自动决定配图；此处选择会随创作要求一并发送。生图模型可不选，留空即使用系统默认配置。</small>
             </div>
           </section>
         )}

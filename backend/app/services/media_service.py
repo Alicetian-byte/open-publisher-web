@@ -110,13 +110,14 @@ class MediaService:
         self.db.commit()
 
     def generate(self, *, prompt: str, size: str = "1024x1024",
-                 owner_user_id: str | None = None) -> dict:
+                 owner_user_id: str | None = None,
+                 image_profile_id: str | None = None) -> dict:
         """OpenAI 兼容 images API；密钥来自环境变量。"""
         from fastapi import HTTPException
 
         from app.services.model_profile_service import resolve_image_config
 
-        resolved = resolve_image_config(db=self.db)
+        resolved = resolve_image_config(db=self.db, profile_id=image_profile_id)
         if not resolved["api_key"]:
             raise HTTPException(
                 status_code=501,

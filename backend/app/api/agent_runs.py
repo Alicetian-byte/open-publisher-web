@@ -38,6 +38,7 @@ class CreationTemplate(BaseModel):
 
 class ImagePlan(BaseModel):
     targetCount: int = Field(default=0, ge=0, le=6)
+    imageModelId: str | None = Field(default=None, max_length=64)
 
 
 class ArticleCreateRequest(BaseModel):

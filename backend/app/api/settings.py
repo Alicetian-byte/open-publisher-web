@@ -88,6 +88,29 @@ def image_status(db: Session = Depends(get_db)):
     return _image_out(db)
 
 
+@router.get("/image-models")
+def list_image_models(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    """创作端可选的已配置生图模型（只读，不含密钥本体）。
+
+    仅返回 DB 中显式保存的生图配置行；未保存时返回空列表，
+    前端展示“跟随系统配置”默认项即可（回退 IMAGE_* 环境变量）。
+    """
+    from app.models.settings_profile import ImageConfig
+
+    rows = db.query(ImageConfig).order_by(ImageConfig.updated_at.desc()).all()
+    return {
+        "models": [
+            {
+                "id": row.id,
+                "name": row.model_id,
+                "model": row.model_id,
+                "keyConfigured": bool(os.environ.get(row.api_key_env)),
+            }
+            for row in rows
+        ],
+    }
+
+
 @router.get("/profiles")
 def list_profiles(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
     from sqlalchemy import or_

@@ -244,6 +244,7 @@ class VisualService:
         base_content_hash: str,
         placements: list[dict],
         owner_user_id: str | None = None,
+        image_model_id: str | None = None,
     ) -> dict:
         article = self.store.read(article_id)
         if article is None:
@@ -265,7 +266,10 @@ class VisualService:
                     skipped.append({"id": placement.get("id"), "reason": "缺少生图提示词"})
                     continue
                 try:
-                    asset = self.media.generate(prompt=prompt, size="1536x1024")
+                    asset = self.media.generate(
+                        prompt=prompt, size="1536x1024",
+                        image_profile_id=image_model_id,
+                    )
                 except Exception as exc:  # noqa: BLE001 - 单张失败不阻塞整篇
                     skipped.append({
                         "id": placement.get("id"),

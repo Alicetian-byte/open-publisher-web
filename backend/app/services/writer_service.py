@@ -688,6 +688,9 @@ class WriterService:
             target = image_plan.get("targetCount")
             if target is not None:
                 sections.append(f"目标图片数量：{target}")
+            image_model_id = str(image_plan.get("imageModelId") or "").strip()
+            if image_model_id:
+                sections.append(f"生图模型：{image_model_id}（仅记录用户选择，不影响写作）")
         web_search = creation.get("webSearchMode")
         if web_search:
             sections.append(f"联网检索模式：{web_search}")

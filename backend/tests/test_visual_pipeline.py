@@ -120,7 +120,7 @@ def test_apply_inserts_assets_and_commits_revision(factory, article):
         }
         generated: dict = {}
 
-        def fake_generate(*, prompt: str, size: str = "1024x1024"):
+        def fake_generate(*, prompt: str, size: str = "1024x1024", image_profile_id: str | None = None):
             generated["prompt"] = prompt
             return {
                 "id": "gen-1", "name": "生成图", "alt": prompt[:200],
@@ -175,7 +175,7 @@ def test_visual_plan_api_returns_hash_binding(client, article):
 
 
 def test_visual_apply_api_creates_new_revision(client, factory, article, monkeypatch):
-    def fake_generate(self, *, prompt: str, size: str = "1024x1024"):
+    def fake_generate(self, *, prompt: str, size: str = "1024x1024", image_profile_id: str | None = None):
         return {
             "id": "gen-api", "name": "生成图", "alt": prompt[:200],
             "usageHint": "AI 生成", "mime": "image/png",
@@ -201,3 +201,4 @@ def test_visual_apply_api_creates_new_revision(client, factory, article, monkeyp
 
     state = client.get("/api/articles/article-visual").json()
     assert state["currentRevisionId"] == body["article"]["currentRevisionId"]
+

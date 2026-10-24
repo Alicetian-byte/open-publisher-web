@@ -137,11 +137,16 @@ def get_image_config(db: Session) -> ImageConfig | None:
     return db.get(ImageConfig, IMAGE_CONFIG_ID)
 
 
-def resolve_image_config(db: Session | None = None) -> dict:
-    """解析生图配置：DB 全局配置 > IMAGE_* 环境变量 > 文本 LLM 回退。
+def resolve_image_config(
+    db: Session | None = None,
+    *,
+    profile_id: str | None = None,
+) -> dict:
+    """解析生图配置：DB 指定/全局配置 > IMAGE_* 环境变量 > 文本 LLM 回退。
 
     与文本 LLM 相同的密钥约定：api_key_env 只记录环境变量名，
     运行时读取进程环境，密钥本体永不入库。
+    profile_id 非空时优先取对应配置行；行不存在时回退全局默认行。
     """
     settings = get_settings()
     has_env_override = bool(settings.image_api_key or settings.image_base_url)
@@ -152,13 +157,18 @@ def resolve_image_config(db: Session | None = None) -> dict:
         "model": settings.image_model,
         "timeout_seconds": settings.image_timeout_seconds or settings.llm_timeout_seconds,
         "source": "env" if has_env_override else "fallback",
+        "profileId": None,
     }
     try:
         if db is None:
             with SessionLocal() as session:
-                row = session.get(ImageConfig, IMAGE_CONFIG_ID)
+                row = session.get(ImageConfig, profile_id or IMAGE_CONFIG_ID)
+                if row is None and profile_id:
+                    row = session.get(ImageConfig, IMAGE_CONFIG_ID)
         else:
-            row = db.get(ImageConfig, IMAGE_CONFIG_ID)
+            row = db.get(ImageConfig, profile_id or IMAGE_CONFIG_ID)
+            if row is None and profile_id:
+                row = db.get(ImageConfig, IMAGE_CONFIG_ID)
         if row is not None:
             env_value = os.environ.get(row.api_key_env, "")
             config.update(
@@ -169,6 +179,7 @@ def resolve_image_config(db: Session | None = None) -> dict:
                     "model": row.model_id,
                     "timeout_seconds": row.timeout_seconds,
                     "source": "db",
+                    "profileId": row.id,
                 }
             )
     except Exception:  # noqa: BLE001 - 表不存在等场景回退环境变量配置
