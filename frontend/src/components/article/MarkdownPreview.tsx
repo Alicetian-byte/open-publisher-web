@@ -38,7 +38,7 @@ export function renderMarkdownHtml(markdown: string): string {
 
 let mermaidQueue: Promise<void> = Promise.resolve();
 
-async function renderMermaidSvg(id: string, source: string): Promise<string> {
+export async function renderMermaidSvg(id: string, source: string): Promise<string> {
   const mermaid = (await import("mermaid")).default;
   mermaid.initialize({
     startOnLoad: false,

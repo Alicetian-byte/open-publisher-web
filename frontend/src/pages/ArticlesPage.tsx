@@ -11,6 +11,7 @@ import {
   RevisionHistoryDrawer,
 } from "../components/article/ArticleTools";
 import { MarkdownWorkbench, type ImageInsertion, type MarkdownSelection, type PreviewPlatform } from "../components/article/MarkdownWorkbench";
+import { ArticleImagePane } from "../components/article/ArticleImagePane";
 
 // 文章库：蓝本 ArticlesPage 的 Web 版核心闭环（团队自有代码）。
 // 本轮实现：列表 + 创作 run（SSE）+ 查看/编辑保存新版本；
@@ -105,7 +106,7 @@ export default function ArticlesPage() {
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("edit");
+  const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("split");
   const [previewPlatform, setPreviewPlatform] = useState<PreviewPlatform>("general");
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
@@ -426,6 +427,15 @@ export default function ArticlesPage() {
   };
 
   const dirty = selected !== null && draft !== selected.markdown;
+
+  // 统一的正文写入入口：工作台编辑与配图栏追加都走这里，确保打断运行逻辑一致。
+  const handleMarkdownChange = (markdown: string) => {
+    if (running && !userEditedRef.current) {
+      userEditedRef.current = true;
+      if (runId) void bridge.stopArticleRun(runId);
+    }
+    setDraft(markdown);
+  };
   const layoutStyle = { "--article-browser-width": "248px" } as CSSProperties;
 
   return (
@@ -792,28 +802,32 @@ export default function ArticlesPage() {
                   修订 {selected.currentRevisionId?.slice(0, 8)}
                 </span>
               </div>
-              <MarkdownWorkbench
-                dirty={dirty}
-                editorMode={viewMode}
-                markdown={draft}
-                onEditorModeChange={setViewMode}
-                onImageFileDrop={uploadImageFile}
-                onMarkdownChange={(markdown) => {
-                  if (running && !userEditedRef.current) {
-                    userEditedRef.current = true;
-                    if (runId) void bridge.stopArticleRun(runId);
-                  }
-                  setDraft(markdown);
-                }}
-                onPendingImageInsertionHandled={() => setPendingInsertion(null)}
-                onRequestSelectionRewrite={(sel) => {
-                  setRewriteSelection(sel);
-                  setRewriteOpen(true);
-                }}
-                pendingImageInsertion={pendingInsertion}
-                previewPlatform={previewPlatform}
-                onPreviewPlatformChange={setPreviewPlatform}
-              />
+              <div className="article-editor__workspace">
+                <div className="article-editor__workbench">
+                  <MarkdownWorkbench
+                    dirty={dirty}
+                    editorMode={viewMode}
+                    markdown={draft}
+                    onEditorModeChange={setViewMode}
+                    onImageFileDrop={uploadImageFile}
+                    onMarkdownChange={handleMarkdownChange}
+                    onPendingImageInsertionHandled={() => setPendingInsertion(null)}
+                    onRequestSelectionRewrite={(sel) => {
+                      setRewriteSelection(sel);
+                      setRewriteOpen(true);
+                    }}
+                    pendingImageInsertion={pendingInsertion}
+                    previewPlatform={previewPlatform}
+                    onPreviewPlatformChange={setPreviewPlatform}
+                  />
+                </div>
+                <ArticleImagePane
+                  canInsert={viewMode !== "preview"}
+                  markdown={draft}
+                  onImageFileDrop={uploadImageFile}
+                  onInsertAtCursor={setPendingInsertion}
+                />
+              </div>
               <div style={{ display: "flex", gap: 10 }}>
                 {lastAiSnapshot && (
                   <span className="muted" style={{ fontSize: 12 }}>
