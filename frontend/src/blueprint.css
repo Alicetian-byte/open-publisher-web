@@ -8674,3 +8674,42 @@ select optgroup {
   font: inherit;
   cursor: pointer;
 }
+
+/* 配图编辑下拉菜单：与「插入」按钮同位弹出 */
+.article-figures__item.is-menu-open {
+  overflow: visible;
+  z-index: 6;
+}
+
+.article-figures__menu {
+  position: absolute;
+  top: 32px;
+  right: 6px;
+  display: grid;
+  min-width: 96px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+  z-index: 7;
+}
+
+.article-figures__menu button {
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.article-figures__menu button:hover {
+  background: var(--surface-muted);
+  color: var(--accent-strong);
+}
+
+.article-figures__menu button + button {
+  border-top: 1px solid var(--border);
+}

@@ -46,8 +46,6 @@ interface MarkdownWorkbenchProps {
   editorMode: EditorMode;
   onEditorModeChange: (mode: EditorMode) => void;
   onImageFileDrop?: (file: File) => Promise<ImageInsertion>;
-  pendingImageInsertion?: string | null;
-  onPendingImageInsertionHandled?: () => void;
   streaming?: boolean;
   previewPlatform?: PreviewPlatform;
   onPreviewPlatformChange?: (platform: PreviewPlatform) => void;
@@ -115,8 +113,6 @@ export function MarkdownWorkbench({
   editorMode,
   onEditorModeChange,
   onImageFileDrop,
-  pendingImageInsertion,
-  onPendingImageInsertionHandled,
   streaming = false,
   previewPlatform = "general",
   onPreviewPlatformChange,
@@ -175,14 +171,6 @@ export function MarkdownWorkbench({
       editor.setSelectionRange(position, position);
     });
   };
-
-  useEffect(() => {
-    if (!pendingImageInsertion) return;
-    insertAtSelection(pendingImageInsertion);
-    onPendingImageInsertionHandled?.();
-    // 插入位置取用户最近一次放置的光标（失焦也会保留）；用户从未放置光标时插入正文开头。刻意只在插入标记变化时执行。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingImageInsertion]);
 
   const importFiles = async (files: File[]) => {
     if (!onImageFileDrop) {

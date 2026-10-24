@@ -11,7 +11,9 @@ import {
   RevisionHistoryDrawer,
 } from "../components/article/ArticleTools";
 import { MarkdownWorkbench, type ImageInsertion, type MarkdownSelection, type PreviewPlatform } from "../components/article/MarkdownWorkbench";
-import { ArticleImagePane } from "../components/article/ArticleImagePane";
+import { ArticleImagePane, type ArticleFigure } from "../components/article/ArticleImagePane";
+import { InsertPositionDialog } from "../components/article/InsertPositionDialog";
+import { insertMarkdownAtLine, moveMarkdownSpanToLine, removeMarkdownSpan } from "../components/article/articleMarkdown";
 
 // 文章库：蓝本 ArticlesPage 的 Web 版核心闭环（团队自有代码）。
 // 本轮实现：列表 + 创作 run（SSE）+ 查看/编辑保存新版本；
@@ -115,7 +117,8 @@ export default function ArticlesPage() {
   const [publishOpen, setPublishOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [pendingInsertion, setPendingInsertion] = useState<string | null>(null);
+  // 素材库选图后的待插入片段：确认行号后写入正文对应行。
+  const [pickerSnippet, setPickerSnippet] = useState<string | null>(null);
   const [rewriteSelection, setRewriteSelection] = useState<MarkdownSelection | null>(null);
   const [lastAiSnapshot, setLastAiSnapshot] = useState<{
     label: string;
@@ -429,7 +432,7 @@ export default function ArticlesPage() {
 
   const dirty = selected !== null && draft !== selected.markdown;
 
-  // 统一的正文写入入口：工作台编辑与配图栏追加都走这里，确保打断运行逻辑一致。
+  // 统一的正文写入入口：工作台编辑、配图栏与素材库插入都走这里，确保打断运行逻辑一致。
   const handleMarkdownChange = (markdown: string) => {
     if (running && !userEditedRef.current) {
       userEditedRef.current = true;
@@ -812,12 +815,10 @@ export default function ArticlesPage() {
                     onEditorModeChange={setViewMode}
                     onImageFileDrop={uploadImageFile}
                     onMarkdownChange={handleMarkdownChange}
-                    onPendingImageInsertionHandled={() => setPendingInsertion(null)}
                     onRequestSelectionRewrite={(sel) => {
                       setRewriteSelection(sel);
                       setRewriteOpen(true);
                     }}
-                    pendingImageInsertion={pendingInsertion}
                     previewPlatform={previewPlatform}
                     onPreviewPlatformChange={setPreviewPlatform}
                   />
@@ -826,7 +827,13 @@ export default function ArticlesPage() {
                   canInsert={viewMode !== "preview"}
                   markdown={draft}
                   onImageFileDrop={uploadImageFile}
-                  onInsertAtCursor={setPendingInsertion}
+                  onDeleteFigure={(figure: ArticleFigure) => handleMarkdownChange(removeMarkdownSpan(draft, figure.span))}
+                  onInsertAtLine={(snippet: string, lineNumber: number) =>
+                    handleMarkdownChange(insertMarkdownAtLine(draft, snippet, lineNumber))
+                  }
+                  onMoveFigure={(figure: ArticleFigure, lineNumber: number) =>
+                    handleMarkdownChange(moveMarkdownSpanToLine(draft, figure.span, lineNumber))
+                  }
                 />
               </div>
               <div style={{ display: "flex", gap: 10 }}>
@@ -971,9 +978,22 @@ export default function ArticlesPage() {
         <ImagePickerDialog
           onClose={() => setImagePickerOpen(false)}
           onInsert={(markdownSnippet) => {
-            setPendingInsertion(markdownSnippet);
+            setPickerSnippet(markdownSnippet);
             setImagePickerOpen(false);
           }}
+        />
+      )}
+      {pickerSnippet && (
+        <InsertPositionDialog
+          confirmLabel="插入"
+          defaultLine={1}
+          onClose={() => setPickerSnippet(null)}
+          onConfirm={(lineNumber) => {
+            handleMarkdownChange(insertMarkdownAtLine(draft, pickerSnippet, lineNumber));
+            setPickerSnippet(null);
+          }}
+          preview={pickerSnippet}
+          title="插入素材库图片"
         />
       )}
     </section>
@@ -996,7 +1016,8 @@ function ImagePickerDialog({
   }, []);
 
   return (
-    <div className="studio-modal__scrim" onClick={onClose} role="presentation">
+    <div className="studio-modal" role="presentation">
+      <div className="studio-modal__scrim" onClick={onClose} />
       <section
         aria-label="插入图片"
         aria-modal="true"
