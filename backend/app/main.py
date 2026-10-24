@@ -57,6 +57,14 @@ def recover_interrupted_runtime():
 
             seed_admin = db.query(AppUser).filter(AppUser.username == settings.auth_admin_username).first()
             if seed_admin is None:
+                if settings.auth_admin_password == "change_me_admin_password":
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "AUTH_ADMIN_PASSWORD 仍为占位符，已用占位密码创建管理员 %s；"
+                        "请通过环境变量配置真实密码后重建。",
+                        settings.auth_admin_username,
+                    )
                 db.add(
                     AppUser(
                         id=f"u-{__import__('uuid').uuid4().hex[:32]}",

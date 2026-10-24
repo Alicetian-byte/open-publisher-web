@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     auth_jwt_secret: str = "dev-open-publisher-web-secret-change-me"
     access_token_expire_minutes: int = 720
     auth_admin_username: str = "admin"
-    auth_admin_password: str = "Admin@123456"
+    # 默认只是占位符：必须通过 AUTH_ADMIN_PASSWORD 配置真实管理员密码（不进仓库）
+    auth_admin_password: str = "change_me_admin_password"
     auth_admin_display_name: str = "系统管理员"
 
 
