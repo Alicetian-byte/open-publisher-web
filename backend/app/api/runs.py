@@ -13,7 +13,10 @@ from app.agents.events import RunEventPublisher
 from app.agents.runner import run_workflow
 from app.db.session import get_db
 from app.models.artifact import TweetArtifact
+from app.api.projects import _owned_project_or_404
 from app.models.project import Project
+from app.models.user import AppUser
+from app.core.auth import require_user
 from app.models.revision import TweetRevision
 from app.models.run import TweetRun
 from app.schemas.run import (
@@ -37,6 +40,13 @@ def _get_run_or_404(run_id: str, db: Session) -> TweetRun:
     return run
 
 
+def _get_owned_run_or_404(run_id: str, db: Session, user: AppUser) -> TweetRun:
+    """取 run 并经其所属项目校验当前用户归属（NULL 项目按旧数据共享）。"""
+    run = _get_run_or_404(run_id, db)
+    _owned_project_or_404(run.project_id, db, user)
+    return run
+
+
 @router.post(
     "/projects/{project_id}/runs",
     response_model=RunCreatedResponse,
@@ -46,12 +56,9 @@ def create_run(
     project_id: str,
     payload: RunCreateRequest | None = None,
     db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
 ):
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
-        )
+    project = _owned_project_or_404(project_id, db, user)
 
     extra_input = payload.input if payload else {}
     input_snapshot = {
@@ -86,8 +93,12 @@ def create_run(
 
 
 @router.get("/runs/{run_id}", response_model=RunDetailResponse)
-def get_run(run_id: str, db: Session = Depends(get_db)):
-    run = _get_run_or_404(run_id, db)
+def get_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    run = _get_owned_run_or_404(run_id, db, user)
     detail = RunDetailResponse.model_validate(run, from_attributes=True)
     artifacts = (
         db.query(TweetArtifact)
@@ -107,15 +118,23 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/runs/{run_id}/stop", status_code=status.HTTP_202_ACCEPTED)
-def stop_run(run_id: str, db: Session = Depends(get_db)):
-    _get_run_or_404(run_id, db)
+def stop_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    _get_owned_run_or_404(run_id, db, user)
     RunEventPublisher(run_id).request_stop()
     return {"id": run_id, "stopping": True}
 
 
 @router.get("/runs/{run_id}/events")
-def stream_events(run_id: str, db: Session = Depends(get_db)):
-    _get_run_or_404(run_id, db)
+def stream_events(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    _get_owned_run_or_404(run_id, db, user)
     publisher = RunEventPublisher(run_id)
 
     def event_stream() -> Generator[str, None, None]:
@@ -147,6 +166,7 @@ def stream_events(run_id: str, db: Session = Depends(get_db)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 
 

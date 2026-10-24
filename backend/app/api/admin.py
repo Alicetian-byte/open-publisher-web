@@ -16,6 +16,7 @@ from app.models.agent_runtime import AgentRun
 from app.models.article import Article
 from app.models.assistant import AssistantSession
 from app.models.media import MediaAsset
+from app.models.project import Project
 from app.models.publishing import PublishPlan
 from app.models.settings_profile import ModelProfile
 from app.models.template import ArticleTemplate
@@ -41,6 +42,11 @@ def claim_orphan_resources(
             raise HTTPException(status_code=404, detail="目标用户不存在")
 
     counts = {}
+    counts["projects"] = db.execute(
+        update(Project)
+        .where(Project.owner_user_id.is_(None))
+        .values(owner_user_id=owner_id)
+    ).rowcount or 0
     counts["articles"] = db.execute(
         update(Article)
         .where(Article.owner_user_id.is_(None))
@@ -94,6 +100,7 @@ def orphan_summary(
     from sqlalchemy import select
 
     return {
+        "projects": _count(Project, Project.owner_user_id.is_(None)),
         "articles": _count(Article, Article.owner_user_id.is_(None)),
         "customTemplates": _count(
             ArticleTemplate,

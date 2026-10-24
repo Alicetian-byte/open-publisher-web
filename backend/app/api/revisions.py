@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 from app.agents.llm_client import LLMClient
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.api.projects import _owned_project_or_404
 from app.models.project import Project
+from app.models.user import AppUser
+from app.core.auth import require_user
 from app.models.revision import TweetRevision
 from app.schemas.revision import RevisionCreateRequest, RevisionOptimizeRequest
 from app.schemas.run import RevisionOut
@@ -54,13 +57,13 @@ def _next_version(project_id: str, db: Session) -> int:
     "/projects/{project_id}/revisions",
     response_model=list[RevisionOut],
 )
-def list_revisions(project_id: str, db: Session = Depends(get_db)):
+def list_revisions(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
     """按项目查询版本历史（新版本在前）。"""
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
-        )
+    _owned_project_or_404(project_id, db, user)
     return (
         db.query(TweetRevision)
         .filter(TweetRevision.project_id == project_id)
@@ -78,13 +81,10 @@ def create_revision(
     project_id: str,
     payload: RevisionCreateRequest,
     db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
 ):
     """用户编辑内容后保存为新版本（版本号 = 当前最大版本 + 1）。"""
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
-        )
+    _owned_project_or_404(project_id, db, user)
     revision = TweetRevision(
         project_id=project_id,
         content=payload.content,
@@ -100,8 +100,14 @@ def create_revision(
 
 
 @router.get("/revisions/{revision_id}", response_model=RevisionOut)
-def get_revision(revision_id: str, db: Session = Depends(get_db)):
-    return _get_revision_or_404(revision_id, db)
+def get_revision(
+    revision_id: str,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    revision = _get_revision_or_404(revision_id, db)
+    _owned_project_or_404(revision.project_id, db, user)
+    return revision
 
 
 @router.post(
@@ -114,6 +120,7 @@ def optimize_revision(
     payload: RevisionOptimizeRequest | None = None,
     db: Session = Depends(get_db),
     llm: LLMClient = Depends(get_llm_client),
+    user: AppUser = Depends(require_user),
 ):
     """AI 一键优化：按方向改写指定版本，产出新版本（source="ai_optimized"）。"""
     direction = (payload.direction if payload else "shorter").strip().lower()
@@ -132,6 +139,7 @@ def optimize_revision(
         )
 
     source = _get_revision_or_404(revision_id, db)
+    _owned_project_or_404(source.project_id, db, user)
 
     system = (
         "你是资深产品推文写手。根据优化指令改写推文，"
@@ -160,3 +168,4 @@ def optimize_revision(
     db.commit()
     db.refresh(revision)
     return revision
+

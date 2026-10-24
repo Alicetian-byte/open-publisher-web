@@ -141,6 +141,7 @@ class VisualPlacementRequest(BaseModel):
 
 
 class VisualApplyRequest(BaseModel):
+    imageModelId: str | None = Field(default=None, max_length=64)
     baseRevisionId: str = Field(min_length=1)
     baseContentHash: str = Field(min_length=1)
     placements: list[VisualPlacementRequest] = Field(min_length=1, max_length=6)
@@ -196,6 +197,7 @@ def apply_article_visual(
             base_content_hash=body.baseContentHash,
             placements=[p.model_dump() for p in body.placements],
             owner_user_id=user.id,
+            image_model_id=body.imageModelId,
         )
     except ArticleConflictError:
         raise _conflict() from None

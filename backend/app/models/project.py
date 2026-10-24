@@ -19,6 +19,7 @@ class Project(Base):
     id: Mapped[str] = mapped_column(CHAR(36), primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     website_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     target_audience: Mapped[str] = mapped_column(Text, default="")
