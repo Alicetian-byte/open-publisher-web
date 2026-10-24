@@ -222,15 +222,17 @@ export default function ArticlesPage() {
   };
 
   // 蓝本 CreatePage 资料文件夹导入的 Web 等价：选文本资料（.md/.txt），并入创作要求
-  const importReferenceFiles = async (files: FileList | null) => {
-    if (!files || !files.length) return;
+  const importReferenceFiles = async (fileList: FileList | null) => {
+    if (!fileList || !fileList.length) return;
+    // 必须先快照：onChange 启动导入后会清空 input.value，活 FileList 会被浏览器置空
+    const files = Array.from(fileList);
     const texts = await Promise.all(
-      Array.from(files).map(async (file) => {
+      files.map(async (file) => {
         const text = await file.text();
         return `## 参考资料：${file.name}\n\n${text.trim()}`;
       }),
     );
-    const names = Array.from(files).map((file) => file.name);
+    const names = files.map((file) => file.name);
     setPrompt((current) =>
       `${current ? `${current}\n\n` : ""}${texts.join("\n\n")}`.slice(0, 60000),
     );

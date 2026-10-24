@@ -211,10 +211,12 @@ export default function CreatePage() {
     ? `高保真参考 · ${selectedTemplate.name}`
     : selectedTemplate?.name ?? "自由结构";
 
-  const importReferenceFiles = async (files: FileList | null) => {
-    if (!files || !files.length) return;
+  const importReferenceFiles = async (fileList: FileList | null) => {
+    if (!fileList || !fileList.length) return;
+    // 必须先快照：onChange 启动导入后会清空 input.value，活 FileList 会被浏览器置空
+    const files = Array.from(fileList);
     const texts = await Promise.all(
-      Array.from(files).map(async (file) => `#### 来源文件：\`${file.name}\`\n\n${(await file.text()).trim()}`),
+      files.map(async (file) => `#### 来源文件：\`${file.name}\`\n\n${(await file.text()).trim()}`),
     );
     setReferences((current) => `${current ? `${current}\n\n` : ""}${texts.join("\n\n")}`.slice(0, 300000));
     setImportNote(`已并入 ${files.length} 个资料文件（事实只来自这些资料）。`);

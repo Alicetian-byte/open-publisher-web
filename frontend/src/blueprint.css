@@ -8030,12 +8030,14 @@ select optgroup {
   color: var(--danger, #c0392b);
   font-size: 13px;
   margin: 8px 0 0;
+  padding: 0 16px;
 }
 
 .creation-import-note {
   color: var(--muted);
   font-size: 13px;
   margin: 8px 0 0;
+  padding: 0 16px;
 }
 
 .article-editor__scroll { min-height: 0; overflow-y: auto; display: grid; gap: 12px; align-content: start; padding: 0 20px 20px; }
