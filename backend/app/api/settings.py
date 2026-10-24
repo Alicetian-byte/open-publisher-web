@@ -334,11 +334,20 @@ def test_image_config():
         timeout=resolved["timeout_seconds"],
     )
     try:
-        result = client.images.generate(
-            model=resolved["model"],
-            prompt="connection test: a tiny minimal blue flower, flat illustration",
-            size="256x256", n=1,
-        )
+        result = None
+        last_exc: Exception | None = None
+        for size in ("512x512", "1024x1024"):
+            try:
+                result = client.images.generate(
+                    model=resolved["model"],
+                    prompt="connection test: a tiny minimal blue flower, flat illustration",
+                    size=size, n=1,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+        if result is None:
+            raise last_exc if last_exc else RuntimeError("image test failed")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"生图调用失败：{exc}") from None
     item = result.data[0] if result.data else None
