@@ -216,7 +216,8 @@ export default function ArticlesPage() {
     });
     const res = await api.post<{ id: string; name: string }>("/media", {
       name: file.name,
-      source: dataUrl,
+      mime: file.type || "image/png",
+      dataUrl,
       alt: file.name.replace(/\.[^.]+$/, ""),
     });
     return { alt: file.name.replace(/\.[^.]+$/, ""), src: `/api/media/${res.data.id}/raw` };
