@@ -67,7 +67,7 @@ interface ArticleImagePaneProps {
 }
 
 /** 文章右侧配图栏：展示正文图片与创作生成的 mermaid 图表；
- * 上传的图片先进入"新上传素材"，点「插入」写入编辑器光标处。 */
+ * 上传的图片先进入"新上传素材"，先在正文里点一下要插入的位置再点「插入」；未放置光标时会插入到正文开头。 */
 export function ArticleImagePane({
   markdown,
   onInsertAtCursor,
@@ -185,7 +185,7 @@ export function ArticleImagePane({
             </p>
             {uploads.length === 0 ? (
               <p className="article-figures__empty">
-                拖入或上传的图片会先列在这里，点「插入」写入编辑器光标处。
+                拖入或上传的图片会先列在这里，先在正文里点一下要插入的位置再点「插入」；未放置光标时会插入到正文开头。
               </p>
             ) : (
               <div className="article-figures__grid">
@@ -198,7 +198,7 @@ export function ArticleImagePane({
                         aria-label={`插入 ${asset.alt}`}
                         className="article-figures__insert"
                         onClick={() => insertImage(asset)}
-                        title="插入到编辑器光标处"
+                        title="插入到编辑器当前光标处；未放置光标时插入正文开头"
                         type="button"
                       >
                         插入

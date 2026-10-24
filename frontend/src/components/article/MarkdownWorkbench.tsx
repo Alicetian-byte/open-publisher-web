@@ -125,6 +125,9 @@ export function MarkdownWorkbench({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const selectionRef = useRef({ start: 0, end: 0 });
+  // 用户是否在编辑器里主动放置过光标。程序化赋值会让未聚焦的 textarea
+  // 隐式把 caret 停在文末，不能拿它的 selectionStart 当默认插入位置。
+  const userCaretRef = useRef(false);
   const scrollSourceRef = useRef<"editor" | "preview">("editor");
   const synchronizedScrollTopsRef = useRef<Record<"editor" | "preview", number | null>>({
     editor: null,
@@ -156,8 +159,9 @@ export function MarkdownWorkbench({
 
   const insertAtSelection = (value: string) => {
     const editor = editorRef.current;
-    const start = editor ? editor.selectionStart : selectionRef.current.start;
-    const end = editor ? editor.selectionEnd : selectionRef.current.end;
+    // 只信任用户主动放置过的光标；用户没碰过编辑器时回到最近捕获的位置（初始为正文开头），避免静默落到文末。
+    const start = editor && userCaretRef.current ? editor.selectionStart : selectionRef.current.start;
+    const end = editor && userCaretRef.current ? editor.selectionEnd : selectionRef.current.end;
     const before = markdown.slice(0, start);
     const after = markdown.slice(end);
     const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
@@ -176,7 +180,7 @@ export function MarkdownWorkbench({
     if (!pendingImageInsertion) return;
     insertAtSelection(pendingImageInsertion);
     onPendingImageInsertionHandled?.();
-    // 选中位置在对话框获得焦点前被捕获，这里刻意只在插入标记变化时执行。
+    // 插入位置取用户最近一次放置的光标（失焦也会保留）；用户从未放置光标时插入正文开头。刻意只在插入标记变化时执行。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingImageInsertion]);
 
@@ -216,6 +220,7 @@ export function MarkdownWorkbench({
   };
 
   const captureSelection = (editor: HTMLTextAreaElement) => {
+    userCaretRef.current = true;
     const selection = {
       start: editor.selectionStart,
       end: editor.selectionEnd,
@@ -378,6 +383,9 @@ export function MarkdownWorkbench({
               }}
               onDragOver={(event) => event.preventDefault()}
               onDrop={handleDrop}
+              onFocus={() => {
+                userCaretRef.current = true;
+              }}
               onBlur={(event) => {
                 selectionRef.current = {
                   start: event.currentTarget.selectionStart,
