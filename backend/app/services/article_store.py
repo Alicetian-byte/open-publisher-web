@@ -20,6 +20,10 @@ from sqlalchemy.orm import Session
 from app.models.article import Article, ArticleRevision
 
 
+class ArticlePermissionError(Exception):
+    """非属主对他人文章的写入请求。"""
+
+
 class ArticleConflictError(Exception):
     """乐观并发冲突，等价蓝本 ARTICLE_CONFLICT。"""
 
@@ -68,6 +72,9 @@ class ArticleStore:
             revision_number = 1
             self.db.add(article)
         else:
+            if article.owner_user_id is not None and owner_user_id is not None \
+                    and article.owner_user_id != owner_user_id:
+                raise ArticlePermissionError("article owned by another user")
             if (
                 article.current_revision_id != base_revision_id
                 or article.content_hash != base_content_hash
@@ -181,6 +188,7 @@ class ArticleStore:
             title=target["title"],
             markdown=target["markdown"],
             reason=f"restore revision {revision_id}",
+            owner_user_id=owner_user_id,
         )
 
     @staticmethod
