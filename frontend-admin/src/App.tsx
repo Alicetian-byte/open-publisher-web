@@ -66,6 +66,7 @@ function AiConfigPage() {
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [llmKeyInput, setLlmKeyInput] = useState("");
@@ -100,6 +101,7 @@ function AiConfigPage() {
       return;
     }
     setBusy(true);
+    setBusyAction("createProfile");
     setError(null);
     try {
       await api.post("/settings/profiles", { ...form, isDefault: profiles.length === 0 });
@@ -112,11 +114,13 @@ function AiConfigPage() {
       setError(typeof detail === "string" ? detail : "保存失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const activate = async (id: string) => {
     setBusy(true);
+    setBusyAction("activate");
     setError(null);
     try {
       await api.post(`/settings/profiles/${id}/activate`);
@@ -126,11 +130,13 @@ function AiConfigPage() {
       setError("激活失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const remove = async (id: string) => {
     setBusy(true);
+    setBusyAction("remove");
     setError(null);
     try {
       await api.delete(`/settings/profiles/${id}`);
@@ -140,21 +146,28 @@ function AiConfigPage() {
       setError("删除失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const test = async () => {
     setBusy(true);
+    setBusyAction("test");
     setMessage(null);
     setError(null);
     try {
-      const res = await api.post<{ latencyMs: number; model: string; reply: string }>("/settings/model/test");
+      const res = await api.post<{ latencyMs: number; model: string; reply: string }>("/settings/model/test", null, { timeout: 120000 });
       setMessage(`连通正常：${res.data.model} · ${res.data.latencyMs}ms · ${res.data.reply}`);
     } catch (err) {
+      if ((err as { code?: string })?.code === "ECONNABORTED") {
+        setError("连通测试请求超时（上游超过 120 秒未响应）。");
+        return;
+      }
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof detail === "string" ? detail : "连通测试失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -178,6 +191,7 @@ function AiConfigPage() {
       return;
     }
     setBusy(true);
+    setBusyAction("saveImage");
     setError(null);
     try {
       await api.put<ImageStatus>("/settings/image", imageForm);
@@ -189,11 +203,13 @@ function AiConfigPage() {
       setError(typeof detail === "string" ? detail : "生图配置保存失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const resetImage = async () => {
     setBusy(true);
+    setBusyAction("resetImage");
     setError(null);
     try {
       await api.delete<ImageStatus>("/settings/image");
@@ -204,21 +220,28 @@ function AiConfigPage() {
       setError("重置失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const testImage = async () => {
     setBusy(true);
+    setBusyAction("testImage");
     setMessage(null);
     setError(null);
     try {
-      const res = await api.post<{ latencyMs: number; model: string }>("/settings/image/test");
+      const res = await api.post<{ latencyMs: number; model: string }>("/settings/image/test", null, { timeout: 120000 });
       setMessage(`生图连通正常：${res.data.model} · ${res.data.latencyMs}ms`);
     } catch (err) {
+      if ((err as { code?: string })?.code === "ECONNABORTED") {
+        setError("生图测试请求超时（上游超过 120 秒未响应）。");
+        return;
+      }
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof detail === "string" ? detail : "生图连通测试失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -229,6 +252,7 @@ function AiConfigPage() {
       return;
     }
     setBusy(true);
+    setBusyAction("saveLlmKey");
     setError(null);
     try {
       await api.put("/settings/llm/key", { apiKey: value });
@@ -240,11 +264,13 @@ function AiConfigPage() {
       setError(typeof detail === "string" ? detail : "密钥保存失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const removeLlmKey = async () => {
     setBusy(true);
+    setBusyAction("removeLlmKey");
     setError(null);
     try {
       await api.delete("/settings/llm/key");
@@ -254,6 +280,7 @@ function AiConfigPage() {
       setError("密钥删除失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -264,6 +291,7 @@ function AiConfigPage() {
       return;
     }
     setBusy(true);
+    setBusyAction("saveImageKey");
     setError(null);
     try {
       await api.put("/settings/image/key", { apiKey: value });
@@ -275,11 +303,13 @@ function AiConfigPage() {
       setError(typeof detail === "string" ? detail : "密钥保存失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const removeImageKey = async () => {
     setBusy(true);
+    setBusyAction("removeImageKey");
     setError(null);
     try {
       await api.delete("/settings/image/key");
@@ -289,6 +319,7 @@ function AiConfigPage() {
       setError("密钥删除失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -299,6 +330,7 @@ function AiConfigPage() {
       return;
     }
     setBusy(true);
+    setBusyAction("saveProfileKey");
     setError(null);
     try {
       await api.put(`/settings/profiles/${id}/key`, { apiKey: value });
@@ -310,11 +342,13 @@ function AiConfigPage() {
       setError(typeof detail === "string" ? detail : "密钥保存失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
   const removeProfileKey = async (id: string) => {
     setBusy(true);
+    setBusyAction("removeProfileKey");
     setError(null);
     try {
       await api.delete(`/settings/profiles/${id}/key`);
@@ -324,6 +358,7 @@ function AiConfigPage() {
       setError("密钥删除失败。");
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
   return (
@@ -347,7 +382,7 @@ function AiConfigPage() {
           <div>
             <button className="quiet" onClick={() => void load()} type="button"><RefreshCw size={14} /> 刷新</button>
             <button className="primary" disabled={busy} onClick={() => void test()} type="button">
-              {busy ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试连通
+              {busyAction === "test" ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试连通
             </button>
           </div>
         </div>
@@ -431,7 +466,7 @@ function AiConfigPage() {
           <div>
             <button className="quiet" onClick={() => void load()} type="button"><RefreshCw size={14} /> 刷新</button>
             <button className="primary" disabled={busy} onClick={() => void testImage()} type="button">
-              {busy ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试生图
+              {busyAction === "testImage" ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试生图
             </button>
           </div>
         </div>
