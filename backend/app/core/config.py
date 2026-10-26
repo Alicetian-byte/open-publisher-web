@@ -16,7 +16,11 @@ class Settings(BaseSettings):
 
     # 登录认证（管理站与用户站共用账号后端；令牌签名密钥用环境变量配置）
     auth_jwt_secret: str = "dev-open-publisher-web-secret-change-me"
-    access_token_expire_minutes: int = 720
+    # 企业级安全默认：2 小时（原 720 分钟偏长）；可用 ACCESS_TOKEN_EXPIRE_MINUTES 覆盖
+    access_token_expire_minutes: int = 120
+    # 登录/注册限流（防爆破）：窗口内按客户端 IP 计数
+    login_rate_limit_max: int = 20
+    login_rate_limit_window_seconds: int = 300
     auth_admin_username: str = "admin"
     # 默认只是占位符：必须通过 AUTH_ADMIN_PASSWORD 配置真实管理员密码（不进仓库）
     auth_admin_password: str = "change_me_admin_password"
@@ -82,4 +86,5 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
 
