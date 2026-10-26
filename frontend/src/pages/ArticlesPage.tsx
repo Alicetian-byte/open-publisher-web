@@ -142,6 +142,53 @@ export default function ArticlesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const esRef = useRef<EventSource | null>(null);
   const userEditedRef = useRef(false);
+  // F-007 受控打字机：SSE 增量进队列，requestAnimationFrame 逐字渲染，
+  // 手动编辑（userEditedRef）立即清空队列，AI 不会覆盖用户输入。
+  const typewriterRef = useRef<{ queue: string; frame: number | null }>({ queue: "", frame: null });
+  const cancelTypewriter = () => {
+    const state = typewriterRef.current;
+    if (state.frame !== null) window.cancelAnimationFrame(state.frame);
+    state.queue = "";
+    state.frame = null;
+  };
+  const flushTypewriter = () => {
+    const state = typewriterRef.current;
+    if (state.queue && !userEditedRef.current) {
+      const rest = state.queue;
+      state.queue = "";
+      setDraft((current) => current + rest);
+    } else {
+      state.queue = "";
+    }
+    cancelTypewriter();
+  };
+  // 卸载时关闭 SSE 流并取消打字机帧，避免泄漏与卸载后写入。
+  useEffect(() => () => {
+    esRef.current?.close();
+    cancelTypewriter();
+  }, []);
+  const enqueueTypewriter = (delta: string) => {
+    if (!delta) return;
+    const state = typewriterRef.current;
+    state.queue += delta;
+    if (state.frame !== null) return;
+    const drain = () => {
+      const s = typewriterRef.current;
+      if (userEditedRef.current) {
+        cancelTypewriter();
+        return;
+      }
+      const chunk = s.queue.slice(0, 3);
+      s.queue = s.queue.slice(3);
+      if (chunk) setDraft((current) => current + chunk);
+      if (s.queue.length > 0) {
+        s.frame = window.requestAnimationFrame(drain);
+      } else {
+        s.frame = null;
+      }
+    };
+    state.frame = window.requestAnimationFrame(drain);
+  };
 
   // 模板参数：从模板库跳转过来时，把模板骨架注入创作要求
   useEffect(() => {
@@ -303,10 +350,11 @@ export default function ArticlesPage() {
           ) {
             const delta = (event.payload as { delta?: string }).delta ?? "";
             if (delta && !userEditedRef.current) {
-              setDraft((current) => current + delta);
+              enqueueTypewriter(delta);
             }
           }
           if (event.type === "run.completed") {
+            cancelTypewriter();
             setRunning(false);
             void loadArticles();
             void bridge.getArticle(articleId)
@@ -314,11 +362,14 @@ export default function ArticlesPage() {
               .catch(() => undefined);
           }
           if (event.type === "run.failed") {
+            cancelTypewriter();
             setRunning(false);
             setError(`创作失败：${String((event.payload as { message?: string } | undefined)?.message ?? "未知错误")}`);
           }
         },
         onEnd: () => {
+          // 停止/超时：把已排队的正文一次性落进编辑器，避免丢字。
+          flushTypewriter();
           setRunning(false);
           void loadArticles();
         },
@@ -876,7 +927,23 @@ export default function ArticlesPage() {
           )}
         </div>
         {selected && !creating && assistantOpen && (
-          <AssistantDrawer articleId={selected.articleId} markdown={draft} />
+          <AssistantDrawer
+                              articleId={selected.articleId}
+                              markdown={draft}
+                              selection={rewriteSelection}
+                              onApplySelection={(replacement) => {
+                                if (rewriteSelection) {
+                                  setDraft(
+                                    draft.slice(0, rewriteSelection.start) +
+                                    replacement +
+                                    draft.slice(rewriteSelection.end),
+                                  );
+                                  setRewriteSelection(null);
+                                } else {
+                                  setDraft(draft + "\n\n" + replacement);
+                                }
+                              }}
+                            />
         )}
       </div>
       {selected && rewriteOpen && (

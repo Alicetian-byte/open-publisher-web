@@ -39,6 +39,8 @@ class AssistantChatRequest(BaseModel):
     messages: list[AssistantMessageIn] = Field(min_length=1, max_length=40)
     articleContext: str | None = Field(default=None, max_length=200_000)
     profileId: str | None = Field(default=None, max_length=64)
+    mode: str = Field(default="chat", pattern="^(chat|rewrite)$")
+    attachments: list[str] = Field(default_factory=list, max_length=4)
 
 
 class AssistantSessionCreateRequest(BaseModel):
@@ -50,6 +52,8 @@ class AssistantSessionChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=100_000)
     articleContext: str | None = Field(default=None, max_length=200_000)
     profileId: str | None = Field(default=None, max_length=64)
+    mode: str = Field(default="chat", pattern="^(chat|rewrite)$")
+    attachments: list[str] = Field(default_factory=list, max_length=4)
 
 
 def _now() -> datetime:
@@ -86,6 +90,12 @@ def _owned_session(db: Session, session_id: str, user: AppUser) -> AssistantSess
     return session
 
 
+_REWRITE_INSTRUCTION = (
+    "\n\n当前处于片段改写模式：最后一条用户消息包含对选中片段的改写要求。"
+    "只输出改写后的片段正文本身：不要解释、不要引号、不要 Markdown 代码块围栏。"
+)
+
+
 def _llm_reply(
     db: Session,
     *,
@@ -93,6 +103,8 @@ def _llm_reply(
     history: list[AssistantMessage],
     article_context: str | None,
     profile_id: str | None,
+    mode: str = "chat",
+    attachments: list[str] | None = None,
 ) -> tuple[str, dict]:
     config = resolve_llm_profile_config(
         db, profile_id=profile_id, owner_user_id=user.id,
@@ -100,7 +112,9 @@ def _llm_reply(
     system = _SYSTEM
     if article_context:
         system += "\n\n当前文章全文（只作上下文）：\n---\n" + article_context[:120_000] + "\n---"
-    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+    if mode == "rewrite":
+        system += _REWRITE_INSTRUCTION
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     for message in history[-20:]:
         messages.append({
             "role": "assistant" if message.role == "assistant" else "user",
@@ -111,6 +125,16 @@ def _llm_reply(
         base_url=config["base_url"],
         timeout=config["timeout_seconds"],
     )
+    if attachments:
+        capabilities = config.get("capabilities") or {}
+        if not capabilities.get("vision"):
+            raise HTTPException(status_code=400, detail="当前模型档案未开启图片理解能力。")
+        parts: list[dict[str, Any]] = [{"type": "text", "text": messages[-1]["content"] if messages else ""}]
+        for data_url in attachments:
+            if not data_url.startswith("data:image/"):
+                raise HTTPException(status_code=400, detail="附件必须是图片 dataURL。")
+            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        messages.append({"role": "user", "content": parts})
     try:
         response = client.chat.completions.create(
             model=config["model"], messages=messages, temperature=0.6,
@@ -145,6 +169,7 @@ def assistant_chat(
     reply, config = _llm_reply(
         db, user=user, history=history,
         article_context=body.articleContext, profile_id=body.profileId,
+        mode=body.mode, attachments=body.attachments,
     )
     return {
         "reply": reply,
@@ -217,6 +242,7 @@ def chat_with_assistant_session(
         db, user=user, history=history,
         article_context=body.articleContext or None,
         profile_id=body.profileId or session.active_profile_id,
+        mode=body.mode, attachments=body.attachments,
     )
     _save_message(
         db, session_id=session.id, role="assistant", content=reply,

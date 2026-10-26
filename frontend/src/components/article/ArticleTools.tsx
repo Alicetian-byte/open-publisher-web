@@ -485,7 +485,17 @@ interface AssistantSessionView {
   messages: AssistantSessionMessage[];
 }
 
-export function AssistantDrawer({ articleId, markdown }: { articleId: string; markdown: string }) {
+export function AssistantDrawer({
+  articleId,
+  markdown,
+  selection = null,
+  onApplySelection,
+}: {
+  articleId: string;
+  markdown: string;
+  selection?: { start: number; end: number; text: string } | null;
+  onApplySelection?: (replacement: string) => void;
+}) {
   const [session, setSession] = useState<AssistantSessionView | null>(null);
   const [messages, setMessages] = useState<AssistantSessionMessage[]>([]);
   const [profiles, setProfiles] = useState<AssistantModelProfile[]>([]);
@@ -494,6 +504,9 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const attachmentsRef = useRef<HTMLInputElement>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -535,21 +548,23 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
     };
   }, [articleId]);
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (options?: { mode?: "chat" | "rewrite"; message?: string }) => {
+    const text = (options?.message ?? input).trim();
+    const mode = options?.mode ?? "chat";
     if (!text || busy) return;
     const optimistic: AssistantSessionMessage = {
       id: `local-${Date.now()}`, role: "user", text,
     };
     setMessages((current) => [...current, optimistic]);
     setInput("");
+    setAttachments([]);
     setBusy(true);
     setError(null);
     try {
       if (session) {
         const res = await api.post<AssistantSessionView & { reply: string }>(
           `/assistant/sessions/${session.id}/chat`,
-          { message: text, articleContext: markdown, profileId: activeProfileId || null },
+          { message: text, articleContext: markdown, profileId: activeProfileId || null, mode, attachments },
         );
         setSession({
           ...res.data,
@@ -557,16 +572,20 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
         });
         setMessages(res.data.messages ?? []);
         setActiveProfileId(res.data.activeProfileId ?? activeProfileId);
+        if (mode === "rewrite") setPendingSuggestion(res.data.reply);
       } else {
         const res = await api.post<{ reply: string }>("/assistant/chat", {
           messages: [{ role: "user", text }],
           articleContext: markdown,
           profileId: activeProfileId || null,
+          mode,
+          attachments,
         });
         setMessages((current) => [
           ...current,
           { id: `assistant-${Date.now()}`, role: "assistant", text: res.data.reply },
         ]);
+        if (mode === "rewrite") setPendingSuggestion(res.data.reply);
       }
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -574,6 +593,25 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
     } finally {
       setBusy(false);
     }
+  };
+
+  const addAttachments = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const added: string[] = [];
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > 4 * 1024 * 1024) { setError("「" + file.name + "」超过 4MB，已跳过。"); continue; }
+      if (attachments.length + added.length >= 4) break;
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      added.push(dataUrl);
+    }
+    setAttachments((current) => [...current, ...added].slice(0, 4));
+    if (attachmentsRef.current) attachmentsRef.current.value = "";
   };
 
   const clearSession = async () => {
@@ -660,6 +698,37 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
         {busy && <p className="muted" style={{ fontSize: 12 }}>思考中……</p>}
         {error && <p className="workflow-task__failure" style={{ fontSize: 12 }}>{error}</p>}
       </div>
+      {pendingSuggestion && (
+        <div style={{ background: "var(--accent-soft)", borderRadius: 8, display: "grid", fontSize: 12, gap: 8, padding: 10 }}>
+          <strong>改写建议</strong>
+          <div style={{ maxHeight: 160, overflowY: "auto", whiteSpace: "pre-wrap" }}>{pendingSuggestion}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              className="button button--primary"
+              onClick={() => { onApplySelection?.(pendingSuggestion); setPendingSuggestion(null); }}
+              type="button"
+            >
+              应用到文章
+            </button>
+            <button className="button button--quiet" onClick={() => setPendingSuggestion(null)} type="button">忽略</button>
+          </div>
+        </div>
+      )}
+      {selection?.text.trim() ? (
+        <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
+          <small className="muted" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            已选中 {selection.text.length} 字
+          </small>
+          <button
+            className="button button--quiet"
+            disabled={busy}
+            onClick={() => void send({ mode: "rewrite", message: input.trim() || "润色这段文字，保持原有语气" })}
+            type="button"
+          >
+            改写选中片段
+          </button>
+        </div>
+      ) : null}
       <div style={{ display: "grid", gap: 6 }}>
         <textarea
           onChange={(event) => setInput(event.target.value)}
@@ -673,6 +742,37 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
           rows={3}
           value={input}
         />
+        {attachments.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {attachments.map((dataUrl, index) => (
+              <div key={index} style={{ position: "relative" }}>
+                <img alt={`附件 ${index + 1}`} src={dataUrl} style={{ borderRadius: 6, height: 44, objectFit: "cover", width: 60 }} />
+                <button
+                  aria-label={`移除附件 ${index + 1}`}
+                  className="icon-button"
+                  onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+                  style={{ position: "absolute", right: -6, top: -6 }}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ alignItems: "center", display: "flex", gap: 6 }}>
+          <button className="text-button" disabled={attachments.length >= 4} onClick={() => attachmentsRef.current?.click()} type="button">
+            附加图片（≤4 张，需模型支持图片理解）
+          </button>
+          <input
+            accept="image/*"
+            hidden
+            multiple
+            onChange={(event) => void addAttachments(event.target.files)}
+            ref={attachmentsRef}
+            type="file"
+          />
+        </div>
         <small className="muted" style={{ fontSize: 10 }}>
           上下文：当前编辑器正文；模型由服务端档案决定。
         </small>

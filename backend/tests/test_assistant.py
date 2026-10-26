@@ -36,11 +36,13 @@ def client():
 def fake_reply(monkeypatch):
     calls = []
 
-    def _fake(db, *, user, history, article_context, profile_id):
+    def _fake(db, *, user, history, article_context, profile_id, **kwargs):
         calls.append({
             "history": [(m.role, m.content) for m in history],
             "context": article_context,
             "profileId": profile_id,
+            "mode": kwargs.get("mode"),
+            "attachments": kwargs.get("attachments"),
         })
         return "建议检查开头是否重复。", {"profileId": profile_id, "profileName": None}
 
@@ -82,3 +84,25 @@ def test_stateless_assistant_chat_is_not_persisted(client, fake_reply):
     assert res.status_code == 200
     assert res.json()["persisted"] is False
     assert client.get("/api/assistant/sessions").json()["sessions"] == []
+
+
+
+def test_assistant_rewrite_mode_and_attachments_forwarded(client, fake_reply):
+    created = client.post("/api/assistant/sessions", json={"articleId": "a-9"}).json()
+    res = client.post(f"/api/assistant/sessions/{created['id']}/chat", json={
+        "message": "改写：更精简", "articleContext": "# 文章",
+        "mode": "rewrite", "attachments": [],
+    })
+    assert res.status_code == 200
+    assert fake_reply[0]["mode"] == "rewrite"
+    assert fake_reply[0]["attachments"] == []
+
+
+def test_assistant_attachments_rejected_without_vision_profile(client):
+    """默认（无档案/能力为空）时带附件应 400，而不是静默丢弃。"""
+    res = client.post("/api/assistant/chat", json={
+        "messages": [{"role": "user", "text": "这张图怎么了？"}],
+        "attachments": ["data:image/png;base64,iVBORw0KGgo="],
+    })
+    assert res.status_code == 400
+    assert "图片理解" in res.json()["detail"]
