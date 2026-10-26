@@ -197,6 +197,13 @@ export function MarkdownWorkbench({
   const handleDrop = (event: React.DragEvent<HTMLTextAreaElement>) => {
     event.preventDefault();
     setIsDropTarget(false);
+    // 素材库拖入：优先插入媒体 Markdown（光标处），文件拖入走导入。
+    const mediaMarkdown = event.dataTransfer.getData("text/x-media-markdown");
+    if (mediaMarkdown) {
+      userCaretRef.current = true;
+      insertAtSelection(mediaMarkdown);
+      return;
+    }
     void importFiles(Array.from(event.dataTransfer.files));
   };
 

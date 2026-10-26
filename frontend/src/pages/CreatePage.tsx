@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { PillSelect } from "../components/PillSelect";
@@ -116,6 +116,7 @@ function toneInstruction(tone: Tone) {
 
 export default function CreatePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const promptId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -208,6 +209,15 @@ export default function CreatePage() {
   }, [user]);
 
   useEffect(() => { void api.get<{disabledNodeIds:string[];webSearchMode:"auto"|"off"}>("/settings/preferences").then(r => { setDisabledNodes(r.data.disabledNodeIds); setWebSearchMode(r.data.webSearchMode); }).catch(() => undefined); }, []);
+  // 素材库「带入创作」：读取路由 state 预选素材，用后即清。
+  useEffect(() => {
+    const ids = (location.state as { selectedMediaIds?: string[] } | null)?.selectedMediaIds;
+    if (Array.isArray(ids) && ids.length > 0) {
+      setSelectedMediaIds(ids.slice(0, 20));
+      navigate("/", { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
   const selectedMedia = mediaAssets.filter((asset) => selectedMediaIds.includes(asset.id));
   const selectedImageModel = imageModels.find((m) => m.id === selectedImageModelId) ?? null;
