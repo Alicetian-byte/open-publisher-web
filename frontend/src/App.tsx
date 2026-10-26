@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from
 import { Menu, Plus } from "lucide-react";
 import { api } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { ActiveRunProvider } from "./lib/activeRunContext";
 import LoginPage from "./pages/LoginPage";
 import LandingPage from "./pages/LandingPage";
 import { AvatarMenu } from "./components/AvatarMenu";
@@ -156,11 +157,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <ActiveRunProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/landing" element={<LandingPage />} />
           <Route path="/*" element={<Shell />} />
         </Routes>
+        </ActiveRunProvider>
       </AuthProvider>
     </BrowserRouter>
   );

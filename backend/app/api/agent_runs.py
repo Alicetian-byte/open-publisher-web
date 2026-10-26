@@ -10,7 +10,7 @@ import json
 import time
 from collections.abc import Generator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -193,11 +193,16 @@ def stop_agent_run(
 @router.get("/{run_id}/events")
 def stream_agent_run_events(
     run_id: str,
+    after: int | None = Query(default=None, ge=0),
     db: Session = Depends(get_db),
     user: AppUser = Depends(require_user),
 ):
     run = _get_run_or_404(run_id, db)
     _assert_run_owner(run, user)
+
+    # after=0 是前端 REST 轮询/补读入口；不传参数保持原有 SSE 语义。
+    if after is not None:
+        return RunJournal(db).events_after(run_id, after)
 
     def event_stream() -> Generator[str, None, None]:
         # 独立会话：长连接不占用请求级 session。

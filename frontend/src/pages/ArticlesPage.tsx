@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { useNavigate } from "react-router-dom";
 import { Check, Eye, FileText, FileUp, GripVertical, History, ImagePlus, LoaderCircle, Pencil, Plus, Save, Search, Sparkles, Undo2, Upload, XCircle } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
+import { useActiveRun } from "../lib/activeRunContext";
 import { api } from "../api/client";
 import { bridge } from "../lib/bridge";
 import {
   AssistantDrawer,
+  AiModifyPane,
   PublishDialog,
-  RewriteDialog,
   RevisionHistoryDrawer,
 } from "../components/article/ArticleTools";
 import { MarkdownWorkbench, type ImageInsertion, type MarkdownSelection, type PreviewPlatform } from "../components/article/MarkdownWorkbench";
@@ -31,9 +32,9 @@ interface ArticleState {
 }
 
 interface RunEventItem {
-  sequence: number;
+  sequence?: number;
   type: string;
-  payload: Record<string, unknown>;
+  payload?: Record<string, unknown>;
 }
 
 interface VisualPlanPlacement {
@@ -81,11 +82,11 @@ function journalEventState(type: string): "running" | "complete" | "failed" {
   return "running";
 }
 
-function journalEventMessage(type: string, payload: Record<string, unknown>): string {
-  const message = payload.message ?? payload.stage ?? payload.reason;
+function journalEventMessage(type: string, payload?: Record<string, unknown>): string {
+  const message = payload?.message ?? payload?.stage ?? payload?.reason;
   if (type === "node.started" || type === "node.completed") {
     const verb = type === "node.started" ? "开始" : "完成";
-    return `${verb}：${articleNodeLabel(payload.nodeId as string | undefined)}`;
+    return `${verb}：${articleNodeLabel(payload?.nodeId as string | undefined)}`;
   }
   return JOURNAL_LABELS[type] ?? (typeof message === "string" ? message : type);
 }
@@ -110,17 +111,22 @@ export default function ArticlesPage() {
   const [lengthPreset, setLengthPreset] = useState("medium");
   const [customLength, setCustomLength] = useState("");
   const [humanize, setHumanize] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [events, setEvents] = useState<RunEventItem[]>([]);
-  // 方案2：文章工作流节点状态（node.completed 事件驱动）
-  const [completedNodes, setCompletedNodes] = useState<Set<string>>(new Set());
-  const [running, setRunning] = useState(false);
+  const {
+    activeRun,
+    completedNodeIds,
+    runEvents,
+    runStatus,
+    startRun: startActiveRun,
+    stopRun,
+  } = useActiveRun();
+  // 只让本次发起创作时跟随的文章页展示运行进度；切换其他文章时不劫持编辑器。
+  const [followedRunArticleId, setFollowedRunArticleId] = useState<string | null>(null);
+  const [aiPanelOpen, setAiPanelOpen] = useState(true);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("split");
   const [previewPlatform, setPreviewPlatform] = useState<PreviewPlatform>("general");
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
-  const [rewriteOpen, setRewriteOpen] = useState(false);
   const [visualBusy, setVisualBusy] = useState(false);
   const [visualPlan, setVisualPlan] = useState<VisualPlanSummary | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -140,7 +146,6 @@ export default function ArticlesPage() {
   const [referenceNames, setReferenceNames] = useState<string[]>([]);
   const [referenceDrag, setReferenceDrag] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const esRef = useRef<EventSource | null>(null);
   const userEditedRef = useRef(false);
   // F-007 受控打字机：SSE 增量进队列，requestAnimationFrame 逐字渲染，
   // 手动编辑（userEditedRef）立即清空队列，AI 不会覆盖用户输入。
@@ -162,9 +167,8 @@ export default function ArticlesPage() {
     }
     cancelTypewriter();
   };
-  // 卸载时关闭 SSE 流并取消打字机帧，避免泄漏与卸载后写入。
+  // 卸载时只取消打字机帧；全局 run 监听会跨路由保留 SSE 进度。
   useEffect(() => () => {
-    esRef.current?.close();
     cancelTypewriter();
   }, []);
   const enqueueTypewriter = (delta: string) => {
@@ -189,6 +193,53 @@ export default function ArticlesPage() {
     };
     state.frame = window.requestAnimationFrame(drain);
   };
+
+  // 全局 run 事件到来时，只处理本页未见过的新增量；页面重挂载时跳过历史增量，
+  // 再由文章状态恢复已写入的正文，避免重复拼接。
+  const activeRunForSelected = activeRun
+    && followedRunArticleId === activeRun.articleId
+    && selected?.articleId === activeRun.articleId
+    ? activeRun
+    : null;
+  const events: RunEventItem[] = activeRunForSelected ? runEvents : [];
+  const completedNodes = activeRunForSelected ? completedNodeIds : new Set<string>();
+  const running = Boolean(activeRunForSelected && runStatus === "running");
+
+  const followedRunIdRef = useRef<string | null>(null);
+  const lastRunEventSequenceRef = useRef(0);
+  useEffect(() => {
+    const currentRunId = activeRunForSelected?.runId ?? null;
+    if (!currentRunId) {
+      followedRunIdRef.current = null;
+      lastRunEventSequenceRef.current = 0;
+      return;
+    }
+    if (followedRunIdRef.current !== currentRunId) {
+      followedRunIdRef.current = currentRunId;
+      lastRunEventSequenceRef.current = events[events.length - 1]?.sequence ?? 0;
+      return;
+    }
+    for (const event of events) {
+      if ((event.sequence ?? 0) <= lastRunEventSequenceRef.current) continue;
+      lastRunEventSequenceRef.current = event.sequence ?? lastRunEventSequenceRef.current;
+      if (
+        event.type === "agent.message_delta"
+        && (event.payload as { stage?: string; delta?: string } | undefined)?.stage === "content"
+      ) {
+        const delta = (event.payload as { delta?: string }).delta ?? "";
+        if (delta && !userEditedRef.current) enqueueTypewriter(delta);
+      }
+      if (event.type === "run.failed") {
+        cancelTypewriter();
+        flushTypewriter();
+        setError(`创作失败：${String((event.payload as { message?: string } | undefined)?.message ?? "未知错误")}`);
+      }
+      if (event.type === "run.completed" || event.type === "run.stopped") {
+        cancelTypewriter();
+        flushTypewriter();
+      }
+    }
+  }, [activeRunForSelected, events]);
 
   // 模板参数：从模板库跳转过来时，把模板骨架注入创作要求
   useEffect(() => {
@@ -229,6 +280,12 @@ export default function ArticlesPage() {
     void loadArticles();
   }, [loadArticles]);
 
+  // 直接进入文章页时，也恢复上一个路由发起的运行，避免必须依赖 ?open 深链。
+  useEffect(() => {
+    if (!activeRun || followedRunArticleId || selected) return;
+    setFollowedRunArticleId(activeRun.articleId);
+  }, [activeRun, followedRunArticleId, selected]);
+
   // ?new=1：顶栏「新文章」入口直接打开新建创作面板
   useEffect(() => {
     if (searchParams.get("new") === "1") {
@@ -242,21 +299,95 @@ export default function ArticlesPage() {
   useEffect(() => {
     const openId = searchParams.get("open");
     if (!openId) return;
+    if (activeRun?.articleId === openId) setFollowedRunArticleId(openId);
     api
       .get<ArticleState>(`/articles/${openId}`)
       .then((res) => {
         setSelected(res.data);
         setCreating(false);
-        setRunId(null);
       })
       .catch(() => undefined);
     setSearchParams({}, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [activeRun, searchParams, setSearchParams]);
 
   useEffect(() => {
     setDraft(selected?.markdown ?? "");
     userEditedRef.current = false;
   }, [selected]);
+
+  // 导航离开后重新回到文章页时，从全局 run 监听恢复文章和当前进度。
+  useEffect(() => {
+    if (!activeRun || activeRun.articleId !== followedRunArticleId) return;
+    let cancelled = false;
+    const articleId = activeRun.articleId;
+    void bridge.getArticle(articleId)
+      .then((article) => {
+        if (cancelled) return;
+        setSelected(article);
+        setCreating(false);
+        if (!userEditedRef.current) setDraft(article.markdown);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSelected((current) => current ?? {
+          articleId,
+          title: activeRun.title,
+          currentRevisionId: null,
+          contentHash: null,
+          markdown: "",
+          updatedAt: null,
+        });
+        setCreating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRun, followedRunArticleId]);
+
+  // 全局监听收到完成事件后，这里负责把最终文章刷新进编辑器。
+  // 创作页选择的配图参数随全局 run 传过来，避免离开创作页后丢失自动配图步骤。
+  useEffect(() => {
+    if (runStatus !== "succeeded" || !activeRun || activeRun.articleId !== followedRunArticleId) return;
+    const visualPlan = activeRun.visualPlan;
+    const visualKey = `gaoliu.visual-applied:${activeRun.runId}`;
+    void (async () => {
+      if (visualPlan?.enabled && !sessionStorage.getItem(visualKey)) {
+        sessionStorage.setItem(visualKey, "1");
+        try {
+          const plan = await api.post<VisualPlanSummary>(
+            `/articles/${activeRun.articleId}/visual-plan`,
+            { targetCount: visualPlan.targetCount, assetIds: visualPlan.assetIds },
+          );
+          if (plan.data.placements.length > 0) {
+            const state = await api.get<{
+              currentRevisionId: string | null;
+              contentHash: string | null;
+            }>(`/articles/${activeRun.articleId}`);
+            if (state.data.currentRevisionId && state.data.contentHash) {
+              await api.post(`/articles/${activeRun.articleId}/visual-apply`, {
+                baseRevisionId: state.data.currentRevisionId,
+                baseContentHash: state.data.contentHash,
+                placements: plan.data.placements,
+                imageModelId: visualPlan.imageModelId,
+              });
+            }
+          }
+        } catch {
+          setError("自动配图失败；正文已正常保存。");
+        }
+      }
+      try {
+        const [article] = await Promise.all([
+          bridge.getArticle(activeRun.articleId),
+          loadArticles(),
+        ]);
+        setSelected(article);
+        if (!userEditedRef.current) setDraft(article.markdown);
+      } catch {
+        void loadArticles();
+      }
+    })();
+  }, [activeRun, followedRunArticleId, loadArticles, runStatus]);
 
   const filtered = articles.filter(
     (a) =>
@@ -307,22 +438,19 @@ export default function ArticlesPage() {
       return;
     }
     setError(null);
-    setEvents([]);
-    setCompletedNodes(new Set());
-    setRunning(true);
     setCreating(false);
     const articleId = `article-${Date.now()}`;
     try {
-      const run = await bridge.createArticleRun({
+      await startActiveRun({
         articleId,
         prompt: prompt.trim(),
         tone: tone || null,
         lengthPreset,
         customLength: lengthPreset === "custom" ? customLength : null,
         humanize,
-      });
-      setRunId(run.id);
-      // 蓝本交互：发起后立即迁移到文章工作区，由 run 事件继续驱动编辑器。
+      }, prompt.trim().slice(0, 80));
+      setFollowedRunArticleId(articleId);
+      // 蓝本交互：发起后立即迁移到文章工作区，由全局 run 监听继续驱动编辑器。
       try {
         const article = await bridge.getArticle(articleId);
         setSelected(article);
@@ -337,46 +465,8 @@ export default function ArticlesPage() {
         });
       }
       setCreating(false);
-      esRef.current = bridge.openRunStream(run.id, {
-        onEvent: (event) => {
-          setEvents((prev) => [...prev, event as RunEventItem]);
-          if (event.type === "node.completed") {
-            const nodeId = (event.payload as { nodeId?: string } | undefined)?.nodeId;
-            if (nodeId) setCompletedNodes((prev) => new Set(prev).add(nodeId));
-          }
-          if (
-            event.type === "agent.message_delta"
-            && (event.payload as { stage?: string; delta?: string } | undefined)?.stage === "content"
-          ) {
-            const delta = (event.payload as { delta?: string }).delta ?? "";
-            if (delta && !userEditedRef.current) {
-              enqueueTypewriter(delta);
-            }
-          }
-          if (event.type === "run.completed") {
-            cancelTypewriter();
-            setRunning(false);
-            void loadArticles();
-            void bridge.getArticle(articleId)
-              .then((article) => setSelected(article))
-              .catch(() => undefined);
-          }
-          if (event.type === "run.failed") {
-            cancelTypewriter();
-            setRunning(false);
-            setError(`创作失败：${String((event.payload as { message?: string } | undefined)?.message ?? "未知错误")}`);
-          }
-        },
-        onEnd: () => {
-          // 停止/超时：把已排队的正文一次性落进编辑器，避免丢字。
-          flushTypewriter();
-          setRunning(false);
-          void loadArticles();
-        },
-      });
     } catch {
       setError("启动创作运行失败，请确认后端服务已启动。");
-      setRunning(false);
     }
   };
 
@@ -466,6 +556,7 @@ export default function ArticlesPage() {
 
   const runFailed = events.some((event) => event.type === "run.failed");
 
+
   const undoLastAiChange = async () => {
     if (!selected || !lastAiSnapshot) return;
     if (
@@ -501,7 +592,7 @@ export default function ArticlesPage() {
   const handleMarkdownChange = (markdown: string) => {
     if (running && !userEditedRef.current) {
       userEditedRef.current = true;
-      if (runId) void bridge.stopArticleRun(runId);
+      void stopRun();
     }
     setDraft(markdown);
   };
@@ -547,8 +638,6 @@ export default function ArticlesPage() {
               onClick={() => {
                 setSelected(article);
                 setCreating(false);
-                setRunId(null);
-                setEvents([]);
               }}
               type="button"
             >
@@ -608,11 +697,12 @@ export default function ArticlesPage() {
                 </button>
                 <button
                   className="button button--quiet"
-                  onClick={() => setRewriteOpen(true)}
+                  aria-expanded={aiPanelOpen}
+                  onClick={() => setAiPanelOpen((v) => !v)}
                   type="button"
                 >
                   <Pencil size={15} />
-                  AI 改写
+                  AI 修改
                 </button>
                 <button
                   className="button button--quiet"
@@ -817,54 +907,37 @@ export default function ArticlesPage() {
             </div>
           )}
 
-          {!creating && runId && (
-            <div>
-              <span className="page-kicker">创作运行</span>
+          {!creating && activeRunForSelected && (
+            <div className="article-run-strip">
               <ArticleRunTimeline completedNodeIds={completedNodes} events={events} stopped={!running} runFailed={runFailed} visualState="hidden" />
-              <ol aria-label="创作事件" className="workflow-task__events" style={{ marginTop: 8 }}>
-                {events.map((event) => {
-                  const state = journalEventState(event.type);
-                  const Icon = state === "failed" ? XCircle : state === "complete" ? Check : LoaderCircle;
-                  return (
-                    <li className={`is-${state}`} key={event.sequence}>
-                      <Icon
-                        aria-hidden="true"
-                        className={state === "running" ? "spin" : undefined}
-                        size={13}
-                      />
-                      <span>{journalEventMessage(event.type, event.payload)}</span>
-                    </li>
-                  );
-                })}
-              </ol>
-              {running && (
-                <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
-                  <p className="muted" style={{ margin: 0 }}>
-                    <LoaderCircle className="spin" size={14} /> 正在撰写正文……手动编辑会打断本次写回。
-                  </p>
-                  <button
-                    className="button button--quiet"
-                    onClick={() => {
-                      if (runId) void bridge.stopArticleRun(runId);
-                    }}
-                    type="button"
-                  >
-                    停止
-                  </button>
-                </div>
+              {events.length > 0 && (
+                <ol aria-label="创作事件" className="workflow-task__events">
+                  {events.slice(-8).map((event) => {
+                    const state = journalEventState(event.type);
+                    const Icon = state === "failed" ? XCircle : state === "complete" ? Check : LoaderCircle;
+                    return (
+                      <li className={`is-${state}`} key={event.sequence}>
+                        <Icon aria-hidden="true" className={state === "running" ? "spin" : undefined} size={13} />
+                        <span>{journalEventMessage(event.type, event.payload)}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
               )}
-              {!running && runFailed && (
-                <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
-                  <p className="muted" style={{ margin: 0 }}>失败上下文已保留，可以按当前要求重试。</p>
-                  <button className="button button--quiet" onClick={() => void startRun()} type="button">
-                    重试创作
+              {running && (
+                <div className="article-run-strip__status">
+                  <p className="muted">
+                    <LoaderCircle className="spin" size={14} /> 正在撰写正文，输出会实时进入编辑器……
+                  </p>
+                  <button className="button button--quiet" onClick={() => void stopRun()} type="button">
+                    停止
                   </button>
                 </div>
               )}
             </div>
           )}
 
-          {!creating && !runId && selected && (
+          {!creating && selected && (
             <div style={{ display: "grid", gap: 10, maxWidth: assistantOpen ? "none" : 900, minWidth: 0 }}>
               <div className="field__head" style={{ padding: "0 2px" }}>
                 <label htmlFor="a-markdown">正文（Markdown）</label>
@@ -883,12 +956,39 @@ export default function ArticlesPage() {
                     onMarkdownChange={handleMarkdownChange}
                     onRequestSelectionRewrite={(sel) => {
                       setRewriteSelection(sel);
-                      setRewriteOpen(true);
+                      setAiPanelOpen(true);
                     }}
                     previewPlatform={previewPlatform}
                     onPreviewPlatformChange={setPreviewPlatform}
                   />
                 </div>
+                {aiPanelOpen && (
+                  <AiModifyPane
+                    articleId={selected.articleId}
+                    key={selected.articleId}
+                    markdown={draft}
+                    onClose={() => setAiPanelOpen(false)}
+                    onApply={(next) => {
+                      setLastAiSnapshot({
+                        label: "AI 修改",
+                        markdown: draft,
+                        currentRevisionId: selected.currentRevisionId,
+                        contentHash: selected.contentHash,
+                      });
+                      if (rewriteSelection) {
+                        setDraft(
+                          draft.slice(0, rewriteSelection.start) +
+                          next +
+                          draft.slice(rewriteSelection.end),
+                        );
+                        setRewriteSelection(null);
+                      } else {
+                        setDraft(next);
+                      }
+                    }}
+                    selection={rewriteSelection}
+                  />
+                )}
                 <ArticleImagePane
                   canInsert={viewMode !== "preview"}
                   markdown={draft}
@@ -919,7 +1019,7 @@ export default function ArticlesPage() {
             </div>
           )}
 
-          {!creating && !runId && !selected && !loading && (
+          {!creating && !selected && !loading && (
             <div className="empty-page">
               <FileText aria-hidden="true" size={28} />
               <p className="muted">从左侧选择文章，或点右上角 + 新建创作</p>
@@ -946,36 +1046,6 @@ export default function ArticlesPage() {
                             />
         )}
       </div>
-      {selected && rewriteOpen && (
-        <RewriteDialog
-          articleId={selected.articleId}
-          initialSelection={rewriteSelection}
-          markdown={draft}
-          onClose={() => {
-            setRewriteOpen(false);
-            setRewriteSelection(null);
-          }}
-          onApply={(next) => {
-            setLastAiSnapshot({
-              label: "AI 改写",
-              markdown: draft,
-              currentRevisionId: selected.currentRevisionId,
-              contentHash: selected.contentHash,
-            });
-            if (rewriteSelection) {
-              setDraft(
-                draft.slice(0, rewriteSelection.start) +
-                next +
-                draft.slice(rewriteSelection.end),
-              );
-            } else {
-              setDraft(next);
-            }
-            setRewriteOpen(false);
-            setRewriteSelection(null);
-          }}
-        />
-      )}
       {selected && visualPlan && (
         <div className="studio-modal__scrim" onClick={() => setVisualPlan(null)} role="presentation">
           <section aria-label="确认配图方案" aria-modal="true" role="dialog" style={{

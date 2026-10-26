@@ -12,11 +12,10 @@ import {
 import { useEffect, useId, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { useActiveRun } from "../lib/activeRunContext";
 import { useAuth } from "../auth/AuthContext";
 import { PillSelect } from "../components/PillSelect";
-import ArticleRunTimeline from "../components/ArticleRunTimeline";
-import { articleNodeLabel } from "../workflow/articleNodes";
-import { bridge } from "../lib/bridge";
+
 
 // 蓝本 CreatePage 的 Web 迁移（团队自有代码，1:1 结构与类名）。
 // 后端映射：POST /agent-runs/article-create（prompt/tone/lengthPreset/customLength）
@@ -64,31 +63,6 @@ interface ImageModelOption {
   keyConfigured: boolean;
 }
 
-interface RunEventItem {
-  key: string;
-  eventType: string;
-  type?: string;
-  message?: string;
-  payload?: Record<string, unknown>;
-}
-
-interface VisualPlanPlacement {
-  id: string;
-  anchorHeading: string | null;
-  anchorExcerpt: string | null;
-  alt: string;
-  source: "existing_asset" | "generate";
-  assetId: string | null;
-  generationPrompt: string;
-}
-
-interface VisualPlanSummary {
-  targetCount: number;
-  placements: VisualPlanPlacement[];
-  sourceRevisionId: string | null;
-  sourceContentHash: string | null;
-}
-
 const lengthOptions: Array<{ id: LengthPreset; label: string }> = [
   { id: "short", label: "短篇" },
   { id: "medium", label: "中篇" },
@@ -118,6 +92,7 @@ export default function CreatePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const { startRun: startActiveRun } = useActiveRun();
   const promptId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -151,15 +126,8 @@ export default function CreatePage() {
   const [selectedImageModelId, setSelectedImageModelId] = useState("");
 
   const [importNote, setImportNote] = useState<string | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [runArticleId, setRunArticleId] = useState<string | null>(null);
-  const [events, setEvents] = useState<RunEventItem[]>([]);
-  const [runStatus, setRunStatus] = useState<"idle" | "running" | "succeeded" | "failed">("idle");
-  // 方案2：文章工作流节点状态（node.completed 事件驱动）+ 前端配图阶段状态。
-  const [completedNodes, setCompletedNodes] = useState<Set<string>>(new Set());
-  const [visualState, setVisualState] = useState<"hidden" | "running" | "done" | "failed">("hidden");
-  const [runError, setRunError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  // 发起后按蓝本工作流直接进入文章工作区；SSE 和进度由全局 ActiveRunProvider 保存。
+  const [starting, setStarting] = useState(false);
   // 配图数量编辑草稿：弹窗打开时同步，避免 0 占位导致需要先删 0 再输入
   useEffect(() => {
     if (picker === "image") setImageCountDraft(String(imageCount));
@@ -203,9 +171,6 @@ export default function CreatePage() {
     api.get<{ assets: MediaAsset[] }>("/media")
       .then((res) => setMediaAssets(res.data.assets ?? []))
       .catch(() => setMediaAssets([]));
-    return () => {
-      esRef.current?.close();
-    };
   }, [user]);
 
   useEffect(() => { void api.get<{disabledNodeIds:string[];webSearchMode:"auto"|"off"}>("/settings/preferences").then(r => { setDisabledNodes(r.data.disabledNodeIds); setWebSearchMode(r.data.webSearchMode); }).catch(() => undefined); }, []);
@@ -293,52 +258,8 @@ export default function CreatePage() {
     }
   };
 
-  // 智能配图（蓝本 visual-plan / visual-apply 三段式的自动版）：
-  // 写作完成后按素材库匹配度规划配图，缺图位置调用生图模型。
-  const runVisualInsertion = async (aid: string) => {
-    if (disabledNodes.includes("visual")) { setVisualState("done"); return; }
-    const push = (message: string) =>
-      setEvents((prev) => [...prev, { key: `visual-${Date.now()}-${prev.length}`, eventType: "visual.status", message }]);
-    setVisualState("running");
-    try {
-      push("正在规划正文配图……");
-      const plan = await api.post<VisualPlanSummary>(`/articles/${aid}/visual-plan`, {
-        targetCount: imagePlanMode === "auto" ? imageCount : 0,
-        assetIds: selectedMediaIds,
-      });
-      if (plan.data.placements.length === 0) {
-        push("视觉规划认为本文不需要配图。");
-        setVisualState("done");
-        return;
-      }
-      const usingLibrary = plan.data.placements.filter((p) => p.source === "existing_asset").length;
-      const generating = plan.data.placements.length - usingLibrary;
-      push(`已规划 ${plan.data.placements.length} 张配图（素材 ${usingLibrary} 张，生成 ${generating} 张）……`);
-      const state = await api.get<{ articleId: string; currentRevisionId: string | null; contentHash: string | null }>(`/articles/${aid}`);
-      if (!state.data.currentRevisionId || !state.data.contentHash) {
-        push("文章尚未保存，无法插入配图。");
-        setVisualState("failed");
-        return;
-      }
-      const applied = await api.post<{ insertedCount: number; skipped: Array<{ reason: string }> }>(
-        `/articles/${aid}/visual-apply`,
-        {
-          baseRevisionId: state.data.currentRevisionId,
-          baseContentHash: state.data.contentHash,
-          placements: plan.data.placements,
-          imageModelId: selectedImageModelId || null,
-        },
-      );
-      push(`配图完成：已插入 ${applied.data.insertedCount} 张${applied.data.skipped.length ? `，跳过 ${applied.data.skipped.length} 张` : ""}。`);
-      setVisualState("done");
-    } catch {
-      push("自动配图失败（生图模型未配置或素材匹配为空），正文已正常保存。");
-      setVisualState("failed");
-    }
-  };
-
   const startCreation = async () => {
-    if (runStatus === "running") return;
+    if (starting) return;
     if (!user) {
       navigate("/login");
       return;
@@ -348,11 +269,7 @@ export default function CreatePage() {
       return;
     }
     setValidation(null);
-    setRunError(null);
-    setEvents([]);
-    setCompletedNodes(new Set());
-    setVisualState("hidden");
-    setRunStatus("running");
+    setStarting(true);
 
     const sections: string[] = [topic.trim()];
     if (title.trim()) sections.push(`文章标题：${title.trim()}`);
@@ -371,9 +288,8 @@ export default function CreatePage() {
     }
 
     const articleId = `article-${Date.now()}`;
-    setRunArticleId(articleId);
     try {
-      const run = await bridge.createArticleRun({
+      await startActiveRun({
         articleId,
         prompt: sections.join("\n\n").slice(0, 100000),
         tone: toneInstruction(tone),
@@ -393,35 +309,20 @@ export default function CreatePage() {
         taskMode: "article_create",
         disabledNodeIds: disabledNodes,
         materialMatchThreshold: 40,
-      });
-      setRunId(run.id);
-      esRef.current = bridge.openRunStream(run.id, {
-        onEvent: (event) => {
-          setEvents((prev) => [...prev, event as RunEventItem]);
-          if (event.type === "node.completed") {
-            const nodeId = (event.payload as { nodeId?: string } | undefined)?.nodeId;
-            if (nodeId) setCompletedNodes((prev) => new Set(prev).add(nodeId));
-          }
-          if (event.type === "run.completed") {
-            setRunStatus("succeeded");
-            if (imagePlanMode === "auto" || selectedMediaIds.length > 0) {
-              void runVisualInsertion(articleId);
-            }
-          }
-          if (event.type === "run.failed") {
-            setRunStatus("failed");
-            setRunError(String(
-              (event.payload as { message?: string } | undefined)?.message ?? "未知错误",
-            ));
-          }
-        },
-        onEnd: () => {
-          setRunStatus((current) => (current === "running" ? "succeeded" : current));
+      }, title.trim() || topic.trim().slice(0, 80), {
+        visualPlan: {
+          enabled: (imagePlanMode === "auto" || selectedMediaIds.length > 0)
+            && !disabledNodes.includes("visual"),
+          targetCount: imagePlanMode === "auto" ? imageCount : 0,
+          imageModelId: selectedImageModelId || null,
+          assetIds: selectedMediaIds,
         },
       });
+      navigate(`/articles?open=${encodeURIComponent(articleId)}`);
     } catch (error) {
-      setRunStatus("failed");
-      setRunError(error instanceof Error ? error.message : "创作请求失败，请稍后重试。");
+      setValidation(error instanceof Error ? error.message : "创作请求失败，请稍后重试。");
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -555,57 +456,18 @@ export default function CreatePage() {
             />
             <button
               className="button button--primary"
-              disabled={runStatus === "running"}
+              disabled={starting}
               onClick={() => void startCreation()}
               type="button"
             >
-              {runStatus === "running" ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-              {runStatus === "running" ? "创作中" : runStatus === "succeeded" || runStatus === "failed" ? "开始另一篇" : user ? "开始创作" : "登录后开始创作"}
+              {starting ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
+              {starting ? "正在进入文章工作区…" : user ? "开始创作" : "登录后开始创作"}
             </button>
           </div>
           {validation && <p className="creation-validation" role="alert">{validation}</p>}
           {importNote && <p className="creation-import-note" role="status">{importNote}</p>}
         </div>
 
-        {runId && (
-          <div className={`creation-activity${runStatus === "succeeded" ? " creation-activity--succeeded" : ""}${runStatus === "failed" ? " creation-activity--failed" : ""}`}>
-            <header>
-              <strong>
-                {runStatus === "running" && "正在创作…"}
-                {runStatus === "succeeded" && "创作完成"}
-                {runStatus === "failed" && "创作失败"}
-              </strong>
-              {runArticleId && runStatus === "succeeded" && (
-                <button className="text-button" onClick={() => navigate(`/articles?open=${encodeURIComponent(runArticleId)}`)} type="button">
-                  打开文章
-                </button>
-              )}
-            </header>
-            {runError && <p role="alert">{runError}</p>}
-            <ArticleRunTimeline
-              completedNodeIds={completedNodes} events={events} stopped={runStatus !== "running"}
-              runFailed={runStatus === "failed"}
-              visualState={imagePlanMode === "auto" || selectedMediaIds.length > 0 ? visualState : "hidden"}
-            />
-            <ol aria-label="本次创作事件">
-              {events.slice(-40).map((event) => {
-                const nodeId = (event.payload as { nodeId?: string } | undefined)?.nodeId;
-                const nodeLabel = nodeId ? articleNodeLabel(nodeId) : "";
-                const nodeText =
-                  event.eventType === "node.started"
-                    ? `开始：${nodeLabel}`
-                    : event.eventType === "node.completed"
-                      ? `完成：${nodeLabel}`
-                      : "";
-                return (
-                  <li key={event.key}>
-                    {event.message || nodeText || event.eventType}
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
-        )}
       </div>
 
       {picker !== null && (
