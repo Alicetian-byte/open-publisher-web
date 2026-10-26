@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     auth_admin_display_name: str = "系统管理员"
 
 
-    # LLM（OpenAI 兼容接口；密钥一律走环境变量，不进仓库）
+    # LLM（OpenAI 兼容接口；密钥支持 DB 加密存储 app_secrets，环境变量仅作回退/开发）
     # 兼容 LLM_API_KEY 与 OPENAI_API_KEY 两种命名（后者为 .env.example 中的习惯写法）
     llm_api_key: str = Field(
         default="",
@@ -57,6 +57,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("IMAGE_TIMEOUT_SECONDS", "OPENAI_IMAGE_TIMEOUT_SECONDS"),
     )
 
+    # 密钥信封主密钥（KEK）：Fernet 密钥，加密 app_secrets 中的密钥密文。
+    # 生产必须显式配置；未配置时开发回退从 auth_jwt_secret 派生。
+    secret_encryption_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("SECRET_ENCRYPTION_KEY", "SECRET_MASTER_KEY"),
+    )
+
     # 工作流
     workflow_score_threshold: int = 80
     workflow_max_iterations: int = 3
@@ -75,3 +82,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

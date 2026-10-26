@@ -1,9 +1,11 @@
-"""设置 API：模型档案管理 + 连通性测试与模型列表发现。
+"""设置 API：模型档案管理 + 密钥加密存储 + 连通性测试与模型列表发现。
 
 蓝本 model-profile / model-test-service / model-discovery 的 Web 版：
 - 多 profile 增删改查与激活（is_default）
-- 密钥永不入库、不下发前端：profile 只存环境变量名
-- test / discover 使用当前激活 profile（无则回退全局环境变量）
+- 企业级密钥存储（2026-10-26 起）：密钥密文入库 app_secrets（Fernet 信封加密，
+  主密钥走 SECRET_ENCRYPTION_KEY 环境变量），环境变量仅作回退/开发路径；
+  密钥明文永不入库、永不回显前端，管理端只见掩码尾号 keyHint
+- test / discover 使用当前激活 profile（无则回退全局配置）
 """
 
 import os
@@ -14,10 +16,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core import secret_box
 from app.core.auth import require_admin, require_user
 from app.db.session import get_db
 from app.models.user import AppUser
 from app.models.settings_profile import ModelProfile
+from app.services import secret_store
 from app.services.model_profile_service import get_active_profile, resolve_llm_config
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -43,6 +47,12 @@ class ProfileUpdate(BaseModel):
     isDefault: bool | None = None
 
 
+class KeyPayload(BaseModel):
+    """密钥录入：明文只在请求体里出现一次，入库即加密，永不回显。"""
+
+    apiKey: str = Field(min_length=4, max_length=4096)
+
+
 def _owned_profile(db: Session, profile_id: str, user: AppUser) -> ModelProfile | None:
     profile = db.get(ModelProfile, profile_id)
     if profile is None or (
@@ -52,7 +62,27 @@ def _owned_profile(db: Session, profile_id: str, user: AppUser) -> ModelProfile 
     return profile
 
 
-def _profile_out(profile: ModelProfile) -> dict:
+def _profile_key_fields(db: Session, profile: ModelProfile) -> dict:
+    """profile 密钥状态：DB 密文 > 环境变量 > 未配置（只返回掩码）。"""
+    meta = secret_store.get_secret_meta(db, secret_store.profile_secret_id(profile.id))
+    if meta is not None:
+        return {
+            "keyConfigured": True,
+            "keySource": "db",
+            "keyHint": meta.get("keyHint", ""),
+        }
+    env_value = os.environ.get(profile.api_key_env, "")
+    if env_value:
+        return {
+            "keyConfigured": True,
+            "keySource": "env",
+            "keyHint": secret_box.mask(env_value),
+        }
+    return {"keyConfigured": False, "keySource": "none", "keyHint": ""}
+
+
+def _profile_out(profile: ModelProfile, db: Session) -> dict:
+    key = _profile_key_fields(db, profile)
     return {
         "id": profile.id,
         "name": profile.name,
@@ -60,11 +90,11 @@ def _profile_out(profile: ModelProfile) -> dict:
         "baseUrl": profile.base_url,
         "modelId": profile.model_id,
         "apiKeyEnv": profile.api_key_env,
-        "keyConfigured": bool(os.environ.get(profile.api_key_env)),
         "timeoutSeconds": profile.timeout_seconds,
         "isDefault": profile.is_default,
         "createdAt": profile.created_at.isoformat() if profile.created_at else None,
         "ownerId": profile.owner_user_id,
+        **key,
     }
 
 
@@ -75,6 +105,8 @@ def model_status(db: Session = Depends(get_db), user: AppUser = Depends(require_
         "baseUrl": resolved["base_url"],
         "model": resolved["model"],
         "keyConfigured": bool(resolved["api_key"]),
+        "keySource": resolved.get("keySource", "none"),
+        "keyHint": resolved.get("keyHint", ""),
         "timeoutSeconds": resolved["timeout_seconds"],
         "profileId": resolved["profileId"],
         "profileName": resolved["profileName"],
@@ -90,25 +122,25 @@ def image_status(db: Session = Depends(get_db)):
 
 @router.get("/image-models")
 def list_image_models(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
-    """创作端可选的已配置生图模型（只读，不含密钥本体）。
-
-    仅返回 DB 中显式保存的生图配置行；未保存时返回空列表，
-    前端展示“跟随系统配置”默认项即可（回退 IMAGE_* 环境变量）。
-    """
+    """创作端可选的已配置生图模型（只读，不含密钥本体）。"""
     from app.models.settings_profile import ImageConfig
 
     rows = db.query(ImageConfig).order_by(ImageConfig.updated_at.desc()).all()
-    return {
-        "models": [
+    models = []
+    for row in rows:
+        meta = secret_store.get_secret_meta(db, secret_store.SECRET_ID_IMAGE_GLOBAL)
+        env_value = os.environ.get(row.api_key_env, "")
+        models.append(
             {
                 "id": row.id,
                 "name": row.model_id,
                 "model": row.model_id,
-                "keyConfigured": bool(os.environ.get(row.api_key_env)),
+                "keyConfigured": bool(meta is not None or env_value),
+                "keySource": "db" if meta is not None else ("env" if env_value else "none"),
+                "keyHint": (meta or {}).get("keyHint", "") or secret_box.mask(env_value),
             }
-            for row in rows
-        ],
-    }
+        )
+    return {"models": models}
 
 
 @router.get("/profiles")
@@ -119,7 +151,7 @@ def list_profiles(db: Session = Depends(get_db), user: AppUser = Depends(require
         ModelProfile.owner_user_id == user.id,
         ModelProfile.owner_user_id.is_(None),
     )).order_by(ModelProfile.created_at.desc()).all()
-    return {"profiles": [_profile_out(p) for p in profiles]}
+    return {"profiles": [_profile_out(p, db) for p in profiles]}
 
 
 @router.post("/profiles", status_code=201, dependencies=[Depends(require_admin)])
@@ -156,7 +188,7 @@ def create_profile(
     db.add(profile)
     db.commit()
     db.refresh(profile)
-    return _profile_out(profile)
+    return _profile_out(profile, db)
 
 
 @router.patch("/profiles/{profile_id}", dependencies=[Depends(require_admin)])
@@ -188,7 +220,7 @@ def update_profile(
             setattr(profile, column, data[key])
     db.commit()
     db.refresh(profile)
-    return _profile_out(profile)
+    return _profile_out(profile, db)
 
 
 @router.post("/profiles/{profile_id}/activate", dependencies=[Depends(require_admin)])
@@ -205,7 +237,7 @@ def activate_profile(
     )
     profile.is_default = True
     db.commit()
-    return _profile_out(profile)
+    return _profile_out(profile, db)
 
 
 @router.delete("/profiles/{profile_id}", status_code=204, dependencies=[Depends(require_admin)])
@@ -228,6 +260,117 @@ def delete_profile(
     return None
 
 
+# ---------- 密钥管理（DB 加密存储；主密钥走 SECRET_ENCRYPTION_KEY 环境变量） ----------
+
+
+def _key_status_out(db: Session, secret_id: str, env_fallback: str = "") -> dict:
+    meta = secret_store.get_secret_meta(db, secret_id)
+    if meta is not None:
+        return {
+            "keyConfigured": True,
+            "keySource": "db",
+            "keyHint": meta.get("keyHint", ""),
+            "keyVersion": meta.get("keyVersion"),
+        }
+    if env_fallback:
+        return {
+            "keyConfigured": True,
+            "keySource": "env",
+            "keyHint": secret_box.mask(env_fallback),
+            "keyVersion": None,
+        }
+    return {"keyConfigured": False, "keySource": "none", "keyHint": "", "keyVersion": None}
+
+
+@router.put("/llm/key", dependencies=[Depends(require_admin)])
+def set_llm_key(
+    body: KeyPayload,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """录入/更新全局 LLM 密钥（加密入库，覆盖 llm:global）。"""
+    from app.core.config import get_settings
+
+    secret_store.set_secret(
+        db, secret_store.SECRET_ID_LLM_GLOBAL, body.apiKey.strip(), actor=user.id
+    )
+    return _key_status_out(db, secret_store.SECRET_ID_LLM_GLOBAL, get_settings().llm_api_key)
+
+
+@router.delete("/llm/key", dependencies=[Depends(require_admin)])
+def delete_llm_key(
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """删除全局 LLM 密钥（回退环境变量）。"""
+    from app.core.config import get_settings
+
+    secret_store.delete_secret(db, secret_store.SECRET_ID_LLM_GLOBAL, actor=user.id)
+    return _key_status_out(db, secret_store.SECRET_ID_LLM_GLOBAL, get_settings().llm_api_key)
+
+
+@router.put("/profiles/{profile_id}/key", dependencies=[Depends(require_admin)])
+def set_profile_key(
+    profile_id: str,
+    body: KeyPayload,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """录入/更新档案级密钥（加密入库，优先级高于该档案的环境变量）。"""
+    profile = _owned_profile(db, profile_id, user)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="模型档案不存在")
+    secret_store.set_secret(
+        db, secret_store.profile_secret_id(profile.id), body.apiKey.strip(), actor=user.id
+    )
+    return _key_status_out(db, secret_store.profile_secret_id(profile.id))
+
+
+@router.delete("/profiles/{profile_id}/key", dependencies=[Depends(require_admin)])
+def delete_profile_key(
+    profile_id: str,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """删除档案级密钥（回退该档案的环境变量 / 全局配置）。"""
+    profile = _owned_profile(db, profile_id, user)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="模型档案不存在")
+    secret_store.delete_secret(db, secret_store.profile_secret_id(profile.id), actor=user.id)
+    return _key_status_out(db, secret_store.profile_secret_id(profile.id))
+
+
+@router.put("/image/key", dependencies=[Depends(require_admin)])
+def set_image_key(
+    body: KeyPayload,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """录入/更新全局生图密钥（加密入库，覆盖 image:global）。"""
+    from app.core.config import get_settings
+
+    secret_store.set_secret(
+        db, secret_store.SECRET_ID_IMAGE_GLOBAL, body.apiKey.strip(), actor=user.id
+    )
+    return _key_status_out(
+        db, secret_store.SECRET_ID_IMAGE_GLOBAL, get_settings().image_api_key
+    )
+
+
+@router.delete("/image/key", dependencies=[Depends(require_admin)])
+def delete_image_key(
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """删除全局生图密钥（回退环境变量 / 文本模型密钥）。"""
+    from app.core.config import get_settings
+
+    secret_store.delete_secret(db, secret_store.SECRET_ID_IMAGE_GLOBAL, actor=user.id)
+    return _key_status_out(
+        db, secret_store.SECRET_ID_IMAGE_GLOBAL, get_settings().image_api_key
+    )
+
+
 def _resolved_llm():
     from app.agents.llm_client import LLMClient
 
@@ -241,7 +384,7 @@ def model_test(db: Session = Depends(get_db)):
     if not llm._api_key or llm._api_key == "sk-not-configured":
         raise HTTPException(
             status_code=501,
-            detail=f"未配置密钥：请设置环境变量（当前来源：{llm.profile_name or '全局 LLM_API_KEY'}）",
+            detail="未配置密钥：请在管理端录入密钥（DB 加密存储），或设置后端环境变量",
         )
     started = time.monotonic()
     try:
@@ -266,7 +409,7 @@ def discover_models(db: Session = Depends(get_db)):
 
     resolved = resolve_llm_config()
     if not resolved["api_key"]:
-        raise HTTPException(status_code=501, detail="未配置 LLM_API_KEY")
+        raise HTTPException(status_code=501, detail="未配置密钥：请在管理端录入或设置环境变量")
     client = OpenAI(
         api_key=resolved["api_key"],
         base_url=resolved["base_url"],
@@ -280,7 +423,7 @@ def discover_models(db: Session = Depends(get_db)):
 
 
 class ImageConfigUpdate(BaseModel):
-    """管理端生图配置；密钥只存环境变量名，本体永不回显。"""
+    """管理端生图配置；密钥走独立的 /image/key 接口，本体永不回显。"""
 
     baseUrl: str = Field(min_length=1, max_length=500)
     modelId: str = Field(min_length=1, max_length=200)
@@ -289,6 +432,8 @@ class ImageConfigUpdate(BaseModel):
 
 
 def _image_out(db: Session | None = None) -> dict:
+    from app.core.config import get_settings
+
     from app.services.model_profile_service import resolve_image_config
 
     resolved = resolve_image_config(db)
@@ -297,6 +442,8 @@ def _image_out(db: Session | None = None) -> dict:
         "model": resolved["model"],
         "apiKeyEnv": resolved["apiKeyEnv"],
         "keyConfigured": bool(resolved["api_key"]),
+        "keySource": resolved.get("keySource", "none"),
+        "keyHint": resolved.get("keyHint", ""),
         "timeoutSeconds": resolved["timeout_seconds"],
         "source": resolved["source"],
     }
@@ -348,7 +495,7 @@ def test_image_config():
     if not resolved["api_key"]:
         raise HTTPException(
             status_code=501,
-            detail=f"未配置密钥：请设置环境变量 {resolved['apiKeyEnv']} 或在上方保存配置",
+            detail="未配置密钥：请在管理端录入生图密钥，或设置 IMAGE_API_KEY 环境变量",
         )
     started = time.monotonic()
     client = OpenAI(

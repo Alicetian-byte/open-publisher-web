@@ -8,6 +8,8 @@ interface ModelStatus {
   baseUrl: string;
   model: string;
   keyConfigured: boolean;
+  keySource: "db" | "env" | "none";
+  keyHint: string;
   timeoutSeconds: number;
   profileId: string | null;
   profileName: string | null;
@@ -22,6 +24,8 @@ interface ProfileOut {
   modelId: string;
   apiKeyEnv: string;
   keyConfigured: boolean;
+  keySource: "db" | "env" | "none";
+  keyHint: string;
   timeoutSeconds: number;
   isDefault: boolean;
 }
@@ -40,6 +44,8 @@ interface ImageStatus {
   model: string;
   apiKeyEnv: string;
   keyConfigured: boolean;
+  keySource: "db" | "env" | "none";
+  keyHint: string;
   timeoutSeconds: number;
   source: "db" | "env" | "fallback";
 }
@@ -62,6 +68,9 @@ function AiConfigPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [llmKeyInput, setLlmKeyInput] = useState("");
+  const [imageKeyInput, setImageKeyInput] = useState("");
+  const [profileKeyInputs, setProfileKeyInputs] = useState<Record<string, string>>({});
   const { logout, user } = useAdminAuth();
 
   const load = useCallback(async () => {
@@ -213,6 +222,110 @@ function AiConfigPage() {
     }
   };
 
+  const saveLlmKey = async () => {
+    const value = llmKeyInput.trim();
+    if (value.length < 4) {
+      setError("密钥长度至少 4 位。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put("/settings/llm/key", { apiKey: value });
+      setLlmKeyInput("");
+      await load();
+      setMessage("LLM 密钥已加密入库。");
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "密钥保存失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeLlmKey = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete("/settings/llm/key");
+      await load();
+      setMessage("LLM 密钥已删除，回退环境变量。");
+    } catch {
+      setError("密钥删除失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveImageKey = async () => {
+    const value = imageKeyInput.trim();
+    if (value.length < 4) {
+      setError("密钥长度至少 4 位。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put("/settings/image/key", { apiKey: value });
+      setImageKeyInput("");
+      await load();
+      setMessage("生图密钥已加密入库。");
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "密钥保存失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeImageKey = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete("/settings/image/key");
+      await load();
+      setMessage("生图密钥已删除，回退环境变量。");
+    } catch {
+      setError("密钥删除失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveProfileKey = async (id: string) => {
+    const value = (profileKeyInputs[id] ?? "").trim();
+    if (value.length < 4) {
+      setError("密钥长度至少 4 位。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put(`/settings/profiles/${id}/key`, { apiKey: value });
+      setProfileKeyInputs({ ...profileKeyInputs, [id]: "" });
+      await load();
+      setMessage("档案密钥已加密入库。");
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "密钥保存失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeProfileKey = async (id: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete(`/settings/profiles/${id}/key`);
+      await load();
+      setMessage("档案密钥已删除，回退环境变量。");
+    } catch {
+      setError("密钥删除失败。");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="admin-shell">
       <header>
@@ -239,14 +352,26 @@ function AiConfigPage() {
           </div>
         </div>
         {status ? (
+          <>
           <div className="config-grid">
             <div><small>API Base URL</small><strong>{status.baseUrl}</strong></div>
             <div><small>模型</small><strong>{status.model}</strong></div>
             <div><small>密钥变量</small><strong>{status.apiKeyEnv}</strong></div>
-            <div><small>密钥状态</small><strong>{status.keyConfigured ? "已配置" : "未配置"}</strong></div>
+            <div><small>密钥状态</small><strong>{status.keyConfigured ? `已配置（${status.keySource === "db" ? "数据库加密" : "环境变量"}）` : "未配置"}</strong></div>
             <div><small>生效档案</small><strong>{status.profileName ?? "全局环境变量"}</strong></div>
             <div><small>超时</small><strong>{status.timeoutSeconds}s</strong></div>
           </div>
+          <div className="admin-form" style={{ marginTop: 12 }}>
+            <input autoComplete="new-password" onChange={(e) => setLlmKeyInput(e.target.value)} placeholder="录入全局 LLM 密钥（加密入库，不回显）" type="password" value={llmKeyInput} />
+            <button className="primary" disabled={busy} onClick={() => void saveLlmKey()} type="button">保存密钥</button>
+            {status.keySource === "db" && (
+              <button className="quiet" disabled={busy} onClick={() => void removeLlmKey()} type="button">删除密钥</button>
+            )}
+          </div>
+          {status.keyHint && (
+            <p className="muted">当前密钥 {status.keyHint}（来源：{status.keySource === "db" ? "数据库加密存储" : "环境变量"}）</p>
+          )}
+          </>
         ) : (
           <p className="muted">加载中...</p>
         )}
@@ -281,7 +406,14 @@ function AiConfigPage() {
             <div className={profile.isDefault ? "profile active" : "profile"} key={profile.id}>
               <div>
                 <strong>{profile.isDefault && <Star color="#f59e0b" size={13} />} {profile.name}</strong>
-                <small>{profile.baseUrl} · {profile.modelId} · {profile.apiKeyEnv} · {profile.keyConfigured ? "Key 已配置" : "Key 未配置"} · {profile.timeoutSeconds}s</small>
+                <small>{profile.baseUrl} · {profile.modelId} · {profile.apiKeyEnv} · {profile.keyConfigured ? `Key 已配置（${profile.keySource === "db" ? "数据库" : "环境变量"}）${profile.keyHint}` : "Key 未配置"} · {profile.timeoutSeconds}s</small>
+              </div>
+              <div className="admin-form" style={{ marginTop: 8 }}>
+                <input autoComplete="new-password" onChange={(e) => setProfileKeyInputs({ ...profileKeyInputs, [profile.id]: e.target.value })} placeholder="录入该档案密钥（加密入库，不回显）" type="password" value={profileKeyInputs[profile.id] ?? ""} />
+                <button className="quiet" disabled={busy} onClick={() => void saveProfileKey(profile.id)} type="button">存密钥</button>
+                {profile.keySource === "db" && (
+                  <button className="quiet" disabled={busy} onClick={() => void removeProfileKey(profile.id)} type="button">删密钥</button>
+                )}
               </div>
               <div className="actions">
                 {!profile.isDefault && <button className="quiet" disabled={busy} onClick={() => void activate(profile.id)} type="button">激活</button>}
@@ -309,12 +441,22 @@ function AiConfigPage() {
               <div><small>API Base URL</small><strong>{image.baseUrl}</strong></div>
               <div><small>模型</small><strong>{image.model}</strong></div>
               <div><small>密钥变量</small><strong>{image.apiKeyEnv}</strong></div>
-              <div><small>密钥状态</small><strong>{image.keyConfigured ? "已配置" : "未配置"}</strong></div>
+              <div><small>密钥状态</small><strong>{image.keyConfigured ? `已配置（${image.keySource === "db" ? "数据库加密" : "环境变量"}）` : "未配置"}</strong></div>
               <div><small>配置来源</small><strong>{image.source === "db" ? "管理端配置" : image.source === "env" ? "环境变量" : "回退文本模型"}</strong></div>
               <div><small>超时</small><strong>{image.timeoutSeconds}s</strong></div>
             </div>
+            <div className="admin-form" style={{ marginTop: 12 }}>
+              <input autoComplete="new-password" onChange={(e) => setImageKeyInput(e.target.value)} placeholder="录入生图密钥（加密入库，不回显；留空表示沿用文本模型密钥）" type="password" value={imageKeyInput} />
+              <button className="primary" disabled={busy} onClick={() => void saveImageKey()} type="button">保存密钥</button>
+              {image.keySource === "db" && (
+                <button className="quiet" disabled={busy} onClick={() => void removeImageKey()} type="button">删除密钥</button>
+              )}
+            </div>
+            {image.keyHint && (
+              <p className="muted">当前生图密钥 {image.keyHint}（来源：{image.keySource === "db" ? "数据库加密存储" : "环境变量"}）</p>
+            )}
             <div className="section-head" style={{ marginTop: 12 }}>
-              <span className="muted">密钥本体只写环境变量，不回显；留空表示沿用文本模型密钥。</span>
+              <span className="muted">密钥支持两种方式：数据库加密存储（推荐）或后端环境变量；均不回显明文。</span>
               <div>
                 <button className="quiet" onClick={openImageForm} type="button">编辑配置</button>
                 {image.source === "db" && (
@@ -345,7 +487,7 @@ function AiConfigPage() {
       <section className="admin-card">
         <h2>密钥安全约定</h2>
         <p className="muted">
-          遵循项目约束：API Key 本体只通过后端环境变量注入，不进入仓库，也不回显到浏览器。
+          企业级密钥约定（2026-10-26 起）：API Key 密文经 Fernet 信封加密存入后端数据库（app_secrets），主密钥通过 SECRET_ENCRYPTION_KEY 环境变量注入、不进仓库；环境变量密钥保留为回退/开发路径。明文不回显到浏览器，不进日志。
           管理端填写 API 地址、模型、超时和密钥环境变量名；服务端会在运行时读取该变量。
         </p>
       </section>
@@ -385,3 +527,8 @@ export default function AdminApp() {
     </AdminAuthProvider>
   );
 }
+
+
+
+
+
