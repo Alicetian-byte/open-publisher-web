@@ -4,7 +4,7 @@
 api_key_env —— 指向后端进程环境变量名，密钥永不入库、不下发前端。
 """
 
-from sqlalchemy import Boolean, DateTime, Integer, String, text
+from sqlalchemy import Boolean, DateTime, Integer, String, JSON, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -21,6 +21,7 @@ class ModelProfile(Base):
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     api_key_env: Mapped[str] = mapped_column(String(120), nullable=False, default="LLM_API_KEY")
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
+    capabilities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[object] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False
@@ -45,3 +46,9 @@ class ImageConfig(Base):
     updated_at: Mapped[object] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
+
+
+class WorkspacePreference(Base):
+    __tablename__ = "workspace_preferences"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

@@ -25,10 +25,14 @@ from app.services.secret_store import (
 
 
 def get_active_profile(db: Session, owner_user_id: str | None = None) -> ModelProfile | None:
-    query = db.query(ModelProfile).filter(ModelProfile.is_default.is_(True))
-    if owner_user_id:
-        query = query.filter(ModelProfile.owner_user_id == owner_user_id)
-    return query.order_by(ModelProfile.created_at.desc()).first()
+    """当前激活档案；模型档案为管理端统一配置的共享资源，不按创建者隔离。"""
+    del owner_user_id  # 兼容旧签名：历史上按创建者过滤，现改为全局共享
+    return (
+        db.query(ModelProfile)
+        .filter(ModelProfile.is_default.is_(True))
+        .order_by(ModelProfile.created_at.desc())
+        .first()
+    )
 
 
 def _env_key_source(env_value: str, settings_api_key: str) -> tuple[str, str]:
@@ -93,6 +97,7 @@ def resolve_llm_config() -> dict:
                     "base_url": profile.base_url,
                     "model": profile.model_id,
                     "timeout_seconds": profile.timeout_seconds,
+                    "capabilities": profile.capabilities or {},
                 }
             )
     except Exception:  # noqa: BLE001 - 表不存在等场景回退全局配置
@@ -134,12 +139,6 @@ def resolve_llm_profile_config(
     profile = db.get(ModelProfile, profile_id)
     if profile is None:
         return config
-    if (
-        owner_user_id
-        and profile.owner_user_id is not None
-        and profile.owner_user_id != owner_user_id
-    ):
-        return config
     pid = profile_secret_id(profile.id)
     profile_meta = get_secret_meta(db, pid) or {}
     profile_key = get_secret(db, pid)
@@ -165,6 +164,7 @@ def resolve_llm_profile_config(
             "base_url": profile.base_url,
             "model": profile.model_id,
             "timeout_seconds": profile.timeout_seconds,
+                    "capabilities": profile.capabilities or {},
         }
     )
     return config

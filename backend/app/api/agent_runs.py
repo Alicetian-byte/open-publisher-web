@@ -34,6 +34,11 @@ class CreationTemplate(BaseModel):
     name: str | None = None
     markdown: str | None = None
     usageInstructions: str | None = None
+    styleProfile: dict | None = None
+    structureProfile: dict | None = None
+    layoutProfile: dict | None = None
+    fixedBlocks: list[dict] | None = None
+    variables: list[str] | None = None
 
 
 class ImagePlan(BaseModel):
@@ -42,6 +47,7 @@ class ImagePlan(BaseModel):
 
 
 class ArticleCreateRequest(BaseModel):
+    profileId: str | None = None
     articleId: str = Field(min_length=1, max_length=200)
     prompt: str = Field(min_length=1, max_length=100_000)
     tone: str | None = None
@@ -88,7 +94,12 @@ def create_article_run(
     article = store.read(body.articleId, user.id)
     if article and article.get("ownerId") not in (None, user.id):
         raise HTTPException(status_code=404, detail={"code": "ARTICLE_NOT_FOUND"})
-    service = WriterService(db)
+    from app.services.workspace_settings import read_preferences
+    from app.services.model_profile_service import resolve_llm_profile_config
+    from app.agents.llm_client import LLMClient
+    prefs = read_preferences(db, "user:" + user.id)
+    config = resolve_llm_profile_config(db, profile_id=body.profileId or prefs.get("profileId"), owner_user_id=user.id)
+    service = WriterService(db, llm=LLMClient(config=config))
     creation = {
         "title": body.title,
         "references": body.references,
@@ -96,9 +107,9 @@ def create_article_run(
         "imageAssets": body.imageAssets,
         "inputImages": body.inputImages,
         "imagePlan": body.imagePlan.model_dump() if body.imagePlan else None,
-        "webSearchMode": body.webSearchMode,
+        "webSearchMode": body.webSearchMode or prefs.get("webSearchMode", "auto"),
         "taskMode": body.taskMode,
-        "disabledNodeIds": body.disabledNodeIds,
+        "disabledNodeIds": body.disabledNodeIds if "disabledNodeIds" in body.model_fields_set else prefs.get("disabledNodeIds", []),
         "materialMatchThreshold": body.materialMatchThreshold,
     }
     try:
@@ -122,6 +133,8 @@ def create_article_run(
 
 
 class RewriteCandidateRequest(BaseModel):
+    profileId: str | None = None
+    inputImages: list[str] = Field(default_factory=list, max_length=4)
     articleId: str = Field(min_length=1, max_length=200)
     markdown: str = Field(min_length=1, max_length=200_000)
     instruction: str = Field(min_length=1, max_length=20_000)
@@ -137,12 +150,15 @@ def create_rewrite_candidate(
 ):
     from app.services.rewrite_service import RewriteService
 
-    service = RewriteService(db)
+    from app.services.model_profile_service import resolve_llm_profile_config
+    from app.agents.llm_client import LLMClient
+    config = resolve_llm_profile_config(db, profile_id=body.profileId, owner_user_id=user.id)
+    service = RewriteService(db, llm=LLMClient(config=config))
     try:
         return service.start_rewrite(
             article_id=body.articleId, markdown=body.markdown,
             instruction=body.instruction, selected_texts=body.selectedTexts,
-            conversation=body.conversation, owner_user_id=user.id,
+            conversation=body.conversation, owner_user_id=user.id, input_images=body.inputImages,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

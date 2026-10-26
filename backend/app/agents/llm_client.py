@@ -42,9 +42,11 @@ class LLMClient:
         base_url: str | None = None,
         model: str | None = None,
         timeout_seconds: int | None = None,
+        config: dict | None = None,
     ) -> None:
         settings = get_settings()
-        resolved = resolve_llm_config()
+        resolved = config or resolve_llm_config()
+        self.capabilities = resolved.get("capabilities") or {}
         self.profile_id = resolved.get("profileId")
         self.profile_name = resolved.get("profileName")
         self._api_key = api_key if api_key is not None else resolved["api_key"]
@@ -59,6 +61,11 @@ class LLMClient:
             base_url=self._base_url,
             timeout=self.timeout_seconds,
         )
+
+    def _options(self, temperature):
+        if self.capabilities.get("reasoning"):
+            return {"max_completion_tokens": self.capabilities.get("maxTokens", 8192), "reasoning_effort":"medium"}
+        return {"temperature":temperature, "max_tokens": self.capabilities.get("maxTokens", 8192)}
 
     @property
     def api_key_configured(self) -> bool:
@@ -95,7 +102,7 @@ class LLMClient:
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
                     ],
-                    temperature=temperature,
+                    **self._options(temperature),
                     response_format={"type": "json_object"},
                 )
                 self.call_count += 1
@@ -111,7 +118,7 @@ class LLMClient:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                temperature=temperature,
+                **self._options(temperature),
                 stream=True,
             )
             for chunk in stream:
@@ -145,7 +152,7 @@ class LLMClient:
         kwargs: dict = {
             "model": self.model,
             "messages": request_messages,
-            "temperature": temperature,
+            **self._options(temperature),
             "stream": True,
         }
         if tools:

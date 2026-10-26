@@ -134,6 +134,7 @@ export default function CreatePage() {
   const [validation, setValidation] = useState<string | null>(null);
 
   const [templates, setTemplates] = useState<MarkdownTemplate[]>([]);
+  const [disabledNodes, setDisabledNodes] = useState<string[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
@@ -206,6 +207,7 @@ export default function CreatePage() {
     };
   }, [user]);
 
+  useEffect(() => { void api.get<{disabledNodeIds:string[];webSearchMode:"auto"|"off"}>("/settings/preferences").then(r => { setDisabledNodes(r.data.disabledNodeIds); setWebSearchMode(r.data.webSearchMode); }).catch(() => undefined); }, []);
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
   const selectedMedia = mediaAssets.filter((asset) => selectedMediaIds.includes(asset.id));
   const selectedImageModel = imageModels.find((m) => m.id === selectedImageModelId) ?? null;
@@ -284,6 +286,7 @@ export default function CreatePage() {
   // 智能配图（蓝本 visual-plan / visual-apply 三段式的自动版）：
   // 写作完成后按素材库匹配度规划配图，缺图位置调用生图模型。
   const runVisualInsertion = async (aid: string) => {
+    if (disabledNodes.includes("visual")) { setVisualState("done"); return; }
     const push = (message: string) =>
       setEvents((prev) => [...prev, { key: `visual-${Date.now()}-${prev.length}`, eventType: "visual.status", message }]);
     setVisualState("running");
@@ -378,7 +381,7 @@ export default function CreatePage() {
         },
         webSearchMode,
         taskMode: "article_create",
-        disabledNodeIds: webSearchMode === "off" ? ["web_search"] : [],
+        disabledNodeIds: disabledNodes,
         materialMatchThreshold: 40,
       });
       setRunId(run.id);
@@ -570,7 +573,7 @@ export default function CreatePage() {
             </header>
             {runError && <p role="alert">{runError}</p>}
             <ArticleRunTimeline
-              completedNodeIds={completedNodes} events={events} stopped={runStatus === "stopped"}
+              completedNodeIds={completedNodes} events={events} stopped={runStatus !== "running"}
               runFailed={runStatus === "failed"}
               visualState={imagePlanMode === "auto" || selectedMediaIds.length > 0 ? visualState : "hidden"}
             />

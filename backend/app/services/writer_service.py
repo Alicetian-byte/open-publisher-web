@@ -126,7 +126,7 @@ def _strip_tool_markup(markdown: str) -> str:
     return cleaned.strip()
 
 
-def _github_repository_summary(repository: str) -> str:
+def _github_repository_summary(repository: str, token: str = "") -> str:
     """蓝本 github_repository 工具：公开 API 读取仓库资料，失败时明确降级。"""
     repo = repository.strip().strip("/")
     if not repo or "/" not in repo:
@@ -135,6 +135,8 @@ def _github_repository_summary(repository: str) -> str:
         "User-Agent": "open-publisher-web-writer",
         "Accept": "application/vnd.github+json",
     }
+    if token:
+        headers["Authorization"] = "Bearer " + token
     try:
         meta_req = urllib.request.Request(
             f"https://api.github.com/repos/{repo}", headers=headers,
@@ -163,9 +165,9 @@ def _github_repository_summary(repository: str) -> str:
         return "GitHub 仓库资料当前不可用。请继续依据用户提供的资料写作，不要编造仓库事实。"
 
 
-def _web_search_summary(query: str) -> str:
+def _web_search_summary(query: str, api_key: str = "") -> str:
     """蓝本 web_search 工具（Tavily）；未配置 Key 或失败时明确降级。"""
-    api_key = os.environ.get("TAVILY_API_KEY", "")
+    api_key = api_key or os.environ.get("TAVILY_API_KEY", "")
     q = query.strip()
     if not api_key or not q:
         return "联网检索当前不可用。请继续依据已有资料写作，不要编造检索结果。"
@@ -466,11 +468,9 @@ class WriterService:
                         ok = False
                         tool_result = "联网工具已禁用，请依据用户资料写作。"
                     elif tool_name == "github_repository":
-                        tool_result = _github_repository_summary(
-                            str(arguments.get("repository", "")),
-                        )
+                        tool_result = self._github(str(arguments.get("repository", "")))
                     elif tool_name == "web_search":
-                        tool_result = _web_search_summary(str(arguments.get("query", "")))
+                        tool_result = self._search(str(arguments.get("query", "")))
                     else:
                         ok = False
                         tool_result = (
@@ -511,7 +511,7 @@ class WriterService:
                 },
             },
         ]
-        if self._network_allowed() and os.environ.get("TAVILY_API_KEY"):
+        if self._network_allowed() and self._integration_key("tavily"):
             specs.append({
                 "type": "function",
                 "function": {
@@ -521,6 +521,18 @@ class WriterService:
                 },
             })
         return specs if self._network_allowed() else specs[:1]
+
+    def _integration_key(self, kind):
+        from app.services.workspace_settings import integration_key
+        return integration_key(self.db, kind)
+
+    def _search(self, query):
+        key = self._integration_key("tavily")
+        return _web_search_summary(query, key) if key else _web_search_summary(query)
+
+    def _github(self, repo):
+        key = self._integration_key("github")
+        return _github_repository_summary(repo, key) if key else _github_repository_summary(repo)
 
     def _network_allowed(self) -> bool:
         creation = getattr(self, "_creation", {})
@@ -729,9 +741,9 @@ class WriterService:
         input_images = creation.get("inputImages") or []
         if input_images:
             parts.append(f"用户随创作要求上传了 {len(input_images)} 张图片。")
-        if self._network_allowed() and os.environ.get("TAVILY_API_KEY") and prompt.strip():
+        if self._network_allowed() and self._integration_key("tavily") and prompt.strip():
             try:
-                summary = _web_search_summary(prompt.strip()[:80])
+                summary = self._search(prompt.strip()[:80])
                 if summary:
                     parts.append("联网检索摘要：\n" + str(summary)[:6000])
             except Exception:  # noqa: BLE001 - 检索失败不阻断创作
@@ -1022,6 +1034,9 @@ class WriterService:
                 if usage:
                     block += f"\n\n{usage}"
                 sections.append(block)
+            for key, label in [("styleProfile", "文风画像"), ("structureProfile", "结构画像"), ("layoutProfile", "排版画像"), ("fixedBlocks", "固定块（按指定位置保留）"), ("variables", "需填充变量")]:
+                if template.get(key):
+                    sections.append(label + "：" + json.dumps(template[key], ensure_ascii=False))
         references = str(creation.get("references") or "").strip()
         if references:
             sections.append(

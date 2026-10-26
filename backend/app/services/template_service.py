@@ -31,10 +31,15 @@ def _doc_template() -> dict:
     return template
 
 
-def seed_builtin_templates(db: Session) -> None:
+def seed_builtin_templates(db: Session, refresh: bool = False) -> None:
     """幂等：不存在才插入内置模板。"""
     t = _doc_template()
-    if db.get(ArticleTemplate, t["id"]) is None:
+    existing = db.get(ArticleTemplate, t["id"])
+    if existing is not None and refresh:
+        for field, key in {"name":"name", "description":"description", "markdown":"markdown", "style_profile":"styleProfile", "structure_profile":"structureProfile", "layout_profile":"layoutProfile", "fixed_blocks":"fixedBlocks", "variables":"variables", "usage_instructions":"usageInstructions"}.items():
+            setattr(existing, field, t.get(key))
+        db.commit()
+    if existing is None:
         db.add(ArticleTemplate(
             id=t["id"], name=t["name"], description=t.get("description", ""),
             category=t["category"], markdown=t["markdown"],
@@ -83,7 +88,10 @@ class TemplateService:
     def create_custom(self, *, name: str, description: str, category: str,
                       markdown: str, usage_instructions: str = "",
                       reference_markdown: str | None = None,
-                      owner_user_id: str | None = None) -> dict:
+                      owner_user_id: str | None = None,
+                      style_profile: dict | None = None, structure_profile: dict | None = None,
+                      layout_profile: dict | None = None, fixed_blocks: list | None = None,
+                      variables: list | None = None) -> dict:
         if not name.strip() or not markdown.strip():
             raise ValueError("模板名称与正文不能为空")
         fingerprint = None
@@ -104,6 +112,8 @@ class TemplateService:
             reference_markdown=reference_markdown,
             source_fingerprint=fingerprint,
             owner_user_id=owner_user_id,
+            style_profile=style_profile or {}, structure_profile=structure_profile or {},
+            layout_profile=layout_profile or {}, fixed_blocks=fixed_blocks or [], variables=variables or [],
         )
         self.db.add(row)
         self.db.commit()
@@ -188,24 +198,15 @@ class TemplateService:
                 "并确认后端容器已注入档案对应的环境变量。"
             )
         data = llm.complete_json(system, f"参考文章：\n\n{markdown[:120_000]}")
+        for key, kind in [("styleProfile", dict), ("structureProfile", dict), ("layoutProfile", dict), ("fixedBlocks", list), ("variables", list)]:
+            if key in data and not isinstance(data[key], kind):
+                raise ValueError(f"模板提取结果 {key} 格式无效，请重试")
         return self.create_custom(
-            name=str(data.get("name", "提取模板")),
-            description=str(data.get("description", "")),
-            category="提取",
-            markdown=str(data.get("markdown", "")),
+            name=str(data.get("name", "提取模板")), description=str(data.get("description", "")),
+            category="提取", markdown=str(data.get("markdown", "")),
             usage_instructions=str(data.get("usageInstructions", "")),
-            reference_markdown=markdown,
-            owner_user_id=owner_user_id,
+            reference_markdown=markdown, owner_user_id=owner_user_id,
+            style_profile=data.get("styleProfile"), structure_profile=data.get("structureProfile"),
+            layout_profile=data.get("layoutProfile"), fixed_blocks=data.get("fixedBlocks"),
+            variables=data.get("variables"),
         )
-        # create_custom 不接收画像参数；提取结果在返回前补齐，保持单一建模板入口。
-        from app.models.template import ArticleTemplate as _Template
-        row = self.db.get(_Template, result["id"])
-        if row is not None:
-            row.style_profile = data.get("styleProfile") if isinstance(data.get("styleProfile"), dict) else {}
-            row.structure_profile = data.get("structureProfile") if isinstance(data.get("structureProfile"), dict) else {}
-            row.layout_profile = data.get("layoutProfile") if isinstance(data.get("layoutProfile"), dict) else {}
-            row.fixed_blocks = data.get("fixedBlocks") if isinstance(data.get("fixedBlocks"), list) else []
-            row.variables = data.get("variables") if isinstance(data.get("variables"), list) else []
-            self.db.commit()
-            return _out(row)
-        return result

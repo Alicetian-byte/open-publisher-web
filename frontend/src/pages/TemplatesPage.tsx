@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Copy, LoaderCircle, Save, Trash2, Wand2 } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
 import { api } from "../api/client";
 import { useNavigate } from "react-router-dom";
 
@@ -81,6 +82,9 @@ function parseJson<T>(value: string, label: string): T {
 
 export default function TemplatesPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [extractSeconds, setExtractSeconds] = useState(0);
   const [templates, setTemplates] = useState<MarkdownTemplate[]>([]);
   const [selected, setSelected] = useState<MarkdownTemplate | null>(null);
   const [form, setForm] = useState<TemplateForm | null>(null);
@@ -91,6 +95,7 @@ export default function TemplatesPage() {
   const [markdown, setMarkdown] = useState("");
   const [extractSource, setExtractSource] = useState("");
   const [extracting, setExtracting] = useState(false);
+  useEffect(() => { if (!extracting) return; setExtractSeconds(0); const id = window.setInterval(() => setExtractSeconds(n => n + 1), 1000); return () => clearInterval(id); }, [extracting]);
 
   const load = useCallback(async () => {
     try {
@@ -145,6 +150,7 @@ export default function TemplatesPage() {
   };
 
   const extract = async () => {
+    if (!rightsConfirmed) { setError("请先确认参考文章使用权。"); return; }
     if (!extractSource.trim()) {
       setError("请先粘贴参考文章。");
       return;
@@ -153,8 +159,8 @@ export default function TemplatesPage() {
     setError(null);
     try {
       const res = await api.post<MarkdownTemplate>("/templates/extract", {
-        markdown: extractSource,
-      });
+        markdown: extractSource, rightsConfirmed,
+      }, { timeout: 180000 });
       setExtractSource("");
       await load();
       setSelected(res.data);
@@ -175,6 +181,7 @@ export default function TemplatesPage() {
     setError(null);
     try {
       const res = await api.post<MarkdownTemplate>("/templates", {
+        ...selected,
         name: `${selected.name} 副本`,
         description: selected.description,
         category: "自定义",
@@ -232,6 +239,7 @@ export default function TemplatesPage() {
           <div>
             <span className="page-kicker">模板库</span>
             <strong>模板</strong>
+            {user?.role === "admin" && <button className="text-button" onClick={() => { void api.post("/templates/refresh-official").then(load).catch(() => setError("官方模板刷新失败")); }}>刷新官方模板</button>}
           </div>
         </div>
         <div className="article-list">
@@ -383,6 +391,9 @@ export default function TemplatesPage() {
               rows={7}
               value={extractSource}
             />
+              <label><input type="checkbox" checked={rightsConfirmed} onChange={e => setRightsConfirmed(e.target.checked)} /> 我拥有参考文章版权或已取得使用许可</label>
+              {extracting && <p role="status">提取中，已等待 {extractSeconds} 秒；最长等待 180 秒，超时后可重试。</p>}
+
             <button className="button button--quiet" disabled={extracting} onClick={() => void extract()} type="button">
               {extracting ? <LoaderCircle className="spin" size={15} /> : <Wand2 size={15} />}
               {extracting ? "提取中……" : "提取模板"}

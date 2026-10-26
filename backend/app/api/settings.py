@@ -27,7 +27,15 @@ from app.services.model_profile_service import get_active_profile, resolve_llm_c
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+class ModelCapabilities(BaseModel):
+    contextWindow: int = Field(default=128000, ge=1024, le=4000000)
+    maxTokens: int = Field(default=8192, ge=256, le=200000)
+    vision: bool = False
+    reasoning: bool = False
+
+
 class ProfileCreate(BaseModel):
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     name: str = Field(min_length=1, max_length=120)
     provider: str = "custom"
     baseUrl: str = Field(min_length=1, max_length=500)
@@ -38,6 +46,7 @@ class ProfileCreate(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
+    capabilities: ModelCapabilities | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
     provider: str | None = None
     baseUrl: str | None = Field(default=None, min_length=1, max_length=500)
@@ -54,11 +63,9 @@ class KeyPayload(BaseModel):
 
 
 def _owned_profile(db: Session, profile_id: str, user: AppUser) -> ModelProfile | None:
+    """模型档案为共享资源，这里仅做存在性校验（user 保留以兼容签名/权限依赖）。"""
+    del user
     profile = db.get(ModelProfile, profile_id)
-    if profile is None or (
-        profile.owner_user_id is not None and profile.owner_user_id != user.id
-    ):
-        return None
     return profile
 
 
@@ -84,6 +91,7 @@ def _profile_key_fields(db: Session, profile: ModelProfile) -> dict:
 def _profile_out(profile: ModelProfile, db: Session) -> dict:
     key = _profile_key_fields(db, profile)
     return {
+        "capabilities": profile.capabilities or ModelCapabilities().model_dump(),
         "id": profile.id,
         "name": profile.name,
         "provider": profile.provider,
@@ -121,7 +129,7 @@ def image_status(db: Session = Depends(get_db)):
 
 
 @router.get("/image-models")
-def list_image_models(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+def list_image_models(db: Session = Depends(get_db)):
     """创作端可选的已配置生图模型（只读，不含密钥本体）。"""
     from app.models.settings_profile import ImageConfig
 
@@ -144,13 +152,9 @@ def list_image_models(db: Session = Depends(get_db), user: AppUser = Depends(req
 
 
 @router.get("/profiles")
-def list_profiles(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
-    from sqlalchemy import or_
-
-    profiles = db.query(ModelProfile).filter(or_(
-        ModelProfile.owner_user_id == user.id,
-        ModelProfile.owner_user_id.is_(None),
-    )).order_by(ModelProfile.created_at.desc()).all()
+def list_profiles(db: Session = Depends(get_db)):
+    # 模型档案由管理端统一配置，是平台共享资源：免登录可读（只读，不含密钥明文），增删改仍仅管理员。
+    profiles = db.query(ModelProfile).order_by(ModelProfile.created_at.desc()).all()
     return {"profiles": [_profile_out(p, db) for p in profiles]}
 
 
@@ -162,13 +166,13 @@ def create_profile(
 ):
     exists = db.query(ModelProfile).filter(
         ModelProfile.name == body.name,
-        ModelProfile.owner_user_id == user.id,
+        ModelProfile.owner_user_id.is_(None),
     ).first()
     if exists:
         raise HTTPException(status_code=409, detail="同名模型档案已存在")
     # 第一个档案自动成为默认，避免空默认状态
     is_default = body.isDefault or not db.query(ModelProfile).filter(
-        ModelProfile.owner_user_id == user.id,
+        ModelProfile.owner_user_id.is_(None),
     ).first()
     profile = ModelProfile(
         id=f"mp-{uuid.uuid4().hex[:32]}",
@@ -178,11 +182,12 @@ def create_profile(
         model_id=body.modelId,
         api_key_env=body.apiKeyEnv,
         timeout_seconds=body.timeoutSeconds,
+        capabilities=body.capabilities.model_dump(),
         is_default=is_default,
-        owner_user_id=user.id,
+        owner_user_id=None,  # 管理端配置的平台共享档案，全部用户可见可用
     )
     if is_default:
-        db.query(ModelProfile).filter(ModelProfile.owner_user_id == user.id).update(
+        db.query(ModelProfile).filter(ModelProfile.owner_user_id.is_(None)).update(
             {ModelProfile.is_default: False},
         )
     db.add(profile)
@@ -203,10 +208,11 @@ def update_profile(
         raise HTTPException(status_code=404, detail="模型档案不存在")
     data = body.model_dump(exclude_unset=True)
     if data.get("isDefault"):
-        db.query(ModelProfile).filter(ModelProfile.owner_user_id == user.id).update(
+        db.query(ModelProfile).filter(ModelProfile.owner_user_id.is_(None)).update(
             {ModelProfile.is_default: False},
         )
     mapping = {
+        "capabilities": "capabilities",
         "name": "name",
         "provider": "provider",
         "baseUrl": "base_url",
@@ -232,7 +238,7 @@ def activate_profile(
     profile = _owned_profile(db, profile_id, user)
     if profile is None:
         raise HTTPException(status_code=404, detail="模型档案不存在")
-    db.query(ModelProfile).filter(ModelProfile.owner_user_id == user.id).update(
+    db.query(ModelProfile).filter(ModelProfile.owner_user_id.is_(None)).update(
         {ModelProfile.is_default: False},
     )
     profile.is_default = True
@@ -528,3 +534,60 @@ def test_image_config():
         "latencyMs": int((time.monotonic() - started) * 1000),
         "model": resolved["model"],
     }
+
+
+from typing import Literal
+from app.services.workspace_settings import read_preferences, write_preferences
+
+class WritingPreferences(BaseModel):
+    disabledNodeIds: list[Literal["research", "outline", "draft", "natural-style", "review", "reference-safety", "risk", "visual"]] = Field(default_factory=list, max_length=8)
+    webSearchMode: Literal["auto", "off"] = "auto"
+    profileId: str | None = None
+
+class IntegrationSettings(BaseModel):
+    trustedHosts: list[str] = Field(default_factory=list, max_length=30)
+    publishBridgeUrl: str = Field(default="", max_length=500)
+
+@router.get("/preferences")
+def preferences(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    return WritingPreferences(**read_preferences(db, "user:" + user.id)).model_dump()
+
+@router.put("/preferences")
+def save_preferences(body: WritingPreferences, db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    if body.profileId and db.get(ModelProfile, body.profileId) is None:
+        raise HTTPException(status_code=400, detail="模型档案不存在")
+    return write_preferences(db, "user:" + user.id, body.model_dump())
+
+@router.get("/integrations", dependencies=[Depends(require_admin)])
+def integrations(db: Session = Depends(get_db)):
+    return {**IntegrationSettings(**read_preferences(db, "integrations")).model_dump(),
+            "tavily": _key_status_out(db, "integration:tavily", os.environ.get("TAVILY_API_KEY", "")),
+            "github": _key_status_out(db, "integration:github", os.environ.get("GITHUB_TOKEN", ""))}
+
+@router.put("/integrations", dependencies=[Depends(require_admin)])
+def save_integrations(body: IntegrationSettings, db: Session = Depends(get_db)):
+    from urllib.parse import urlparse
+    import re
+    hosts = [h.strip().lower() for h in body.trustedHosts if h.strip()]
+    if any(not re.fullmatch(r"[a-z0-9.-]+", h) or ".." in h for h in hosts):
+        raise HTTPException(status_code=400, detail="可信 Host 只填写主机名")
+    if body.publishBridgeUrl:
+        url = urlparse(body.publishBridgeUrl)
+        if url.scheme not in ("http", "https") or url.hostname not in hosts or url.username or url.password or url.query or url.fragment:
+            raise HTTPException(status_code=400, detail="发布桥需为可信 Host 的 HTTP(S) 地址，不允许凭据或查询参数")
+    return write_preferences(db, "integrations", {**body.model_dump(), "trustedHosts":hosts})
+
+@router.put("/integrations/{kind}/key", dependencies=[Depends(require_admin)])
+def set_integration_key(kind: Literal["tavily", "github"], body: KeyPayload, db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    secret_store.set_secret(db, "integration:" + kind, body.apiKey.strip(), actor=user.id)
+    return _key_status_out(db, "integration:" + kind)
+
+@router.get("/data/export")
+def export_my_data(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    from app.services.article_store import ArticleStore
+    from app.services.template_service import TemplateService
+    from app.services.media_service import MediaService
+    from app.api.assistant import list_assistant_sessions
+    return {"schemaVersion":1, "articles":ArticleStore(db).list(user.id),
+            "templates":TemplateService(db).list(user.id), "media":MediaService(db).list(user.id),
+            "assistant":list_assistant_sessions(db=db, user=user), "preferences":preferences(db=db, user=user)}
