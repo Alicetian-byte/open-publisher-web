@@ -32,6 +32,11 @@ PROMPT_FILES = {
     "system": "writer-system.v1.md",
     "create": "writer-create.v1.md",
     "humanizer": "humanizer-zh.v1.md",
+    # 蓝本 8 节点工作流（WorkflowWorkspace）的分阶段提示词
+    "outline": "writer-outline.v1.md",
+    "review": "writer-review.v1.md",
+    "reference_safety": "writer-reference-safety.v1.md",
+    "risk": "writer-risk.v1.md",
 }
 
 _LENGTH_PRESETS = {
@@ -259,54 +264,83 @@ class WriterService:
         owner_user_id: str | None,
         creation: dict,
     ) -> None:
+        self._run_id = run_id
+        self._creation = creation
+        disabled = set(creation.get("disabledNodeIds") or [])
+
+        def stage(node_id, action, fallback=None):
+            self._ensure_not_stopping(run_id)
+            if node_id in disabled:
+                self._node_completed(run_id, node_id, {"skipped": True, "reason": "disabled"})
+                return fallback
+            result = action()
+            self._ensure_not_stopping(run_id)
+            return result
+
         try:
+            self._ensure_not_stopping(run_id)
             self.journal.transition(run_id, "running")
             self.journal.append(run_id, "run.started", {"operation": "article-create"})
-
+            research = stage("research", lambda: self._stage_research(run_id, prompt, creation), "")
+            outline = stage("outline", lambda: self._stage_outline(
+                run_id, prompt, length_preset, custom_length, research), {})
             system_prompt = _load_prompt("system")
-            user_prompt: str | list[dict] = self._build_user_prompt(
+            user_prompt = self._build_user_prompt(
                 prompt=prompt, tone=tone, length_preset=length_preset,
                 custom_length=custom_length, humanize=humanize, creation=creation,
             )
+            if research:
+                user_prompt = self._append_prompt_section(user_prompt, research)
+            outline_text = self._render_outline(outline)
+            if outline_text:
+                user_prompt = self._append_prompt_section(user_prompt, outline_text)
             input_images = [str(item) for item in (creation.get("inputImages") or []) if item]
             if input_images:
-                # 多模态输入：OpenAI 兼容 content parts，图片以 data URL 附在文本后。
                 user_prompt = [
                     {"type": "text", "text": user_prompt},
-                    *[
-                        {"type": "image_url", "image_url": {"url": data_url}}
-                        for data_url in input_images[:10]
-                    ],
+                    *[{"type": "image_url", "image_url": {"url": url}} for url in input_images[:10]],
                 ]
 
-            if callable(getattr(self.llm, "stream_chat", None)):
-                committed = self._run_agent_loop(
-                    run_id, article_id, system_prompt, user_prompt,
-                    base_revision_id=base_revision_id,
-                    base_content_hash=base_content_hash,
-                    owner_user_id=owner_user_id,
-                )
-            else:
-                committed = self._run_single_turn(
-                    run_id, article_id, system_prompt, user_prompt, prompt,
-                    base_revision_id=base_revision_id,
-                    base_content_hash=base_content_hash,
-                    owner_user_id=owner_user_id,
-                )
+            def draft():
+                self._node_started(run_id, "draft")
+                kwargs = dict(base_revision_id=base_revision_id,
+                              base_content_hash=base_content_hash, owner_user_id=owner_user_id)
+                if callable(getattr(self.llm, "stream_chat", None)):
+                    result = self._run_agent_loop(run_id, article_id, system_prompt, user_prompt, **kwargs)
+                else:
+                    result = self._run_single_turn(run_id, article_id, system_prompt, user_prompt, prompt, **kwargs)
+                self._node_completed(run_id, "draft", {"chars": len(result.get("markdown") or "")})
+                return result
 
-            latest = self.journal.get_run(run_id)
-            if latest and latest["status"] == "stopping":
-                self.journal.append(run_id, "run.stopped", {})
-                self.journal.transition(run_id, "stopped")
-                return
-            # 先写事件再转终态：SSE/测试在拿到终态后立即读事件不会漏尾事件。
-            self.journal.append(run_id, "revision.committed", {
-                "articleId": article_id,
-                "revisionId": committed["currentRevisionId"],
-                "revisionNumber": self._revision_number(article_id),
-            })
+            committed = stage("draft", draft, self.store.read(article_id))
+            for node_id, action in [
+                ("natural-style", lambda: self._stage_natural_style(
+                    run_id, article_id, committed, tone, humanize, owner_user_id)),
+                ("review", lambda: self._stage_review(run_id, article_id, committed, owner_user_id)),
+                ("reference-safety", lambda: self._stage_reference_safety(
+                    run_id, article_id, committed, research, owner_user_id)),
+                ("risk", lambda: self._stage_risk(run_id, article_id, committed)),
+            ]:
+                if committed is None and node_id not in disabled:
+                    self._node_completed(run_id, node_id, {"skipped": True, "reason": "no-draft"})
+                else:
+                    result = stage(node_id, action, committed)
+                    if isinstance(result, dict):
+                        committed = result
+            stage("visual", lambda: (
+                self._node_started(run_id, "visual"),
+                self._node_completed(run_id, "visual", {
+                    "skipped": True, "reason": "manual-or-frontend-driven",
+                }),
+            ))
+            self._ensure_not_stopping(run_id)
+            if committed:
+                self.journal.append(run_id, "revision.committed", {
+                    "articleId": article_id, "revisionId": committed["currentRevisionId"],
+                    "revisionNumber": self._revision_number(article_id),
+                })
             self.journal.append(run_id, "run.completed", {
-                "revisionId": committed["currentRevisionId"],
+                "revisionId": committed["currentRevisionId"] if committed else None,
             })
             self.journal.transition(run_id, "completed")
         except WriterDeadlineExceeded as exc:
@@ -376,6 +410,7 @@ class WriterService:
             for event in self.llm.stream_chat(
                 system_prompt, messages, tools=tools, temperature=0.7,
             ):
+                self._ensure_not_stopping(run_id)
                 if event.get("type") == "text":
                     delta = event.get("delta", "")
                     if delta:
@@ -408,6 +443,7 @@ class WriterService:
             })
 
             for index, call in enumerate(tool_calls):
+                self._ensure_not_stopping(run_id)
                 tool_name = call.get("name", "")
                 arguments = self._parse_tool_arguments(call.get("arguments", ""))
                 call_id = call.get("id") or f"call_{index}"
@@ -426,7 +462,10 @@ class WriterService:
                     )
                 else:
                     ok = True
-                    if tool_name == "github_repository":
+                    if not self._network_allowed():
+                        ok = False
+                        tool_result = "联网工具已禁用，请依据用户资料写作。"
+                    elif tool_name == "github_repository":
                         tool_result = _github_repository_summary(
                             str(arguments.get("repository", "")),
                         )
@@ -439,6 +478,7 @@ class WriterService:
                             "请依据已有资料继续写作。"
                         )
 
+                self._ensure_not_stopping(run_id)
                 self.journal.append(run_id, "agent.tool_result", {
                     "tool": tool_name, "ok": ok, "message": tool_result[:300],
                 })
@@ -471,7 +511,7 @@ class WriterService:
                 },
             },
         ]
-        if os.environ.get("TAVILY_API_KEY"):
+        if self._network_allowed() and os.environ.get("TAVILY_API_KEY"):
             specs.append({
                 "type": "function",
                 "function": {
@@ -480,7 +520,11 @@ class WriterService:
                     "parameters": _WEB_SEARCH_SCHEMA,
                 },
             })
-        return specs
+        return specs if self._network_allowed() else specs[:1]
+
+    def _network_allowed(self) -> bool:
+        creation = getattr(self, "_creation", {})
+        return creation.get("webSearchMode") != "off" and not ({"research", "web_search"} & set(creation.get("disabledNodeIds") or []))
 
     @staticmethod
     def _parse_tool_arguments(raw: str) -> dict:
@@ -501,6 +545,7 @@ class WriterService:
         owner_user_id: str | None,
     ) -> tuple[dict, str, bool]:
         """蓝本 write_article 语义：提交成品 → 不可变修订；拒绝脏输出。"""
+        self._ensure_not_stopping(run_id)
         title = str(arguments.get("title") or "").strip()
         markdown = str(arguments.get("markdown") or "").strip()
         reason = str(arguments.get("reason") or "").strip()
@@ -548,6 +593,7 @@ class WriterService:
         markdown = self._generate_markdown(
             run_id, article_id, f"{_SINGLE_TURN_CONTRACT}\n\n{user_prompt}",
         ).strip()
+        self._ensure_not_stopping(run_id)
         cleaned = _strip_tool_markup(markdown)
         if not cleaned:
             raise RuntimeError("模型没有返回正文（输出仅为工具调用标记）")
@@ -628,6 +674,7 @@ class WriterService:
             checkpointed_chars = total_chars
         _ = checkpointed_chars
 
+        self._ensure_not_stopping(run_id)
         return "".join(parts)
 
     def _append_content_delta(
@@ -639,6 +686,311 @@ class WriterService:
             "chars": len(delta),
             "totalChars": total_chars,
         })
+
+    # ---- 蓝本 8 节点工作流（WorkflowWorkspace）的分阶段实现 ----
+    # 节点事件：node.started / node.completed（payload.nodeId），由 SSE 流式转发。
+    # 后置润色/审阅/核验节点在能力不足或内部出错时优雅降级（skipped），不阻断创作。
+
+    def _node_started(self, run_id: str, node_id: str) -> None:
+        self._ensure_not_stopping(run_id)
+        self.journal.append(run_id, "node.started", {"nodeId": node_id})
+
+    def _node_completed(
+        self, run_id: str, node_id: str, payload: dict | None = None,
+    ) -> None:
+        self._ensure_not_stopping(run_id)
+        self.journal.append(
+            run_id, "node.completed", {"nodeId": node_id, **(payload or {})},
+        )
+
+    def _llm_json(self, system: str, user: str) -> dict:
+        """优先 complete_json；返回非 dict 视为不可用。"""
+        complete_json = getattr(self.llm, "complete_json", None)
+        if not callable(complete_json):
+            raise RuntimeError("LLM 客户端不支持结构化输出")
+        self._ensure_not_stopping(self._run_id)
+        data = complete_json(system, user)
+        self._ensure_not_stopping(self._run_id)
+        return data if isinstance(data, dict) else {}
+
+    def _stage_research(self, run_id: str, prompt: str, creation: dict) -> str:
+        """research 节点：汇总参考资料 / 素材 / 联网检索摘要。"""
+        self._node_started(run_id, "research")
+        parts: list[str] = []
+        references = str(creation.get("references") or "").strip()
+        if references:
+            parts.append("用户参考资料：\n" + references[:20000])
+        assets = creation.get("imageAssets") or []
+        if assets:
+            parts.append(
+                f"已选素材库图片 {len(assets)} 张：写作时可围绕其主题展开，"
+                "但不得杜撰图片内容。"
+            )
+        input_images = creation.get("inputImages") or []
+        if input_images:
+            parts.append(f"用户随创作要求上传了 {len(input_images)} 张图片。")
+        if self._network_allowed() and os.environ.get("TAVILY_API_KEY") and prompt.strip():
+            try:
+                summary = _web_search_summary(prompt.strip()[:80])
+                if summary:
+                    parts.append("联网检索摘要：\n" + str(summary)[:6000])
+            except Exception:  # noqa: BLE001 - 检索失败不阻断创作
+                parts.append("（联网检索暂时不可用，依据已有资料写作。）")
+        research = "\n\n".join(parts) or "（无额外资料，依据创作要求与常识写作。）"
+        self._node_completed(run_id, "research", {"chars": len(research)})
+        return research
+
+    def _stage_outline(
+        self, run_id: str, prompt: str, length_preset: str,
+        custom_length: str | None, research: str,
+    ) -> dict:
+        """outline 节点：结构化大纲；失败时降级为自由结构。"""
+        self._node_started(run_id, "outline")
+        try:
+            length_text = _LENGTH_PRESETS.get(length_preset, "")
+            if length_preset == "custom" and custom_length:
+                length_text = f"篇幅：{custom_length}"
+            outline = self._llm_json(
+                _load_prompt("outline"),
+                "\n\n".join([
+                    f"篇幅要求：{length_text or '不限'}",
+                    f"创作要求：\n{prompt}",
+                    f"已整理资料：\n{research[:8000]}",
+                ]),
+            )
+            sections = outline.get("sections")
+            if isinstance(sections, list) and sections:
+                self._node_completed(
+                    run_id, "outline",
+                    {"mode": "structured", "sections": len(sections)},
+                )
+                return outline
+            self._node_completed(run_id, "outline", {"mode": "free"})
+            return {}
+        except (WriterStopped, ArticleConflictError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - 大纲失败降级为自由结构
+            self._node_completed(
+                run_id, "outline", {"mode": "free", "skipped": True, "reason": str(exc)[:200]},
+            )
+            return {}
+
+    @staticmethod
+    def _render_outline(outline: dict) -> str:
+        sections = outline.get("sections")
+        if not isinstance(sections, list) or not sections:
+            return ""
+        lines: list[str] = []
+        title = str(outline.get("title") or "").strip()
+        if title:
+            lines.append(f"标题：{title}")
+        lines.append("写作大纲（必须遵循以下结构展开）：")
+        for index, section in enumerate(sections, start=1):
+            if not isinstance(section, dict):
+                continue
+            heading = str(section.get("heading") or "").strip()
+            points = section.get("points") or []
+            point_text = "；".join(str(p) for p in points if str(p).strip())
+            lines.append(f"{index}. {heading}" + (f"（{point_text}）" if point_text else ""))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _append_prompt_section(
+        user_prompt: str | list[dict], section: str,
+    ) -> str | list[dict]:
+        """把大纲追加到提示末尾；多模态提示追加到首个文本块。"""
+        if isinstance(user_prompt, str):
+            return f"{user_prompt}\n\n{section}"
+        for item in user_prompt:
+            if isinstance(item, dict) and item.get("type") == "text":
+                item["text"] = f"{item.get('text', '')}\n\n{section}"
+                break
+        return user_prompt
+
+    def _commit_stage(
+        self, run_id: str, article_id: str, title: str, markdown: str,
+        reason: str, owner_user_id: str | None, current: dict,
+    ) -> dict:
+        """后置阶段的新版本提交：基于最新文章状态做乐观并发。"""
+        self._ensure_not_stopping(run_id)
+        stored = self.store.commit(
+            article_id=article_id,
+            base_revision_id=current.get("currentRevisionId"),
+            base_content_hash=current.get("contentHash"),
+            title=title or str(current.get("title") or "").strip(),
+            markdown=markdown,
+            reason=reason,
+            owner_user_id=owner_user_id,
+        )
+        self.journal.append(run_id, "article.checkpointed", {
+            "articleId": article_id, "chars": len(markdown), "stage": reason,
+        })
+        return stored
+
+    def _stage_natural_style(
+        self, run_id: str, article_id: str, committed: dict,
+        tone: str | None, humanize: bool, owner_user_id: str | None,
+    ) -> dict:
+        """natural-style 节点：按 humanizer/文风指令做一轮表达润色。"""
+        self._node_started(run_id, "natural-style")
+        try:
+            complete = getattr(self.llm, "complete", None)
+            current = committed
+            markdown = str(current.get("markdown") or "")
+            if not callable(complete) or len(markdown) < 200:
+                self._node_completed(run_id, "natural-style", {"skipped": True})
+                return committed
+            system = _load_prompt("humanizer")
+            instruction = "请润色以下 Markdown 文章：保持事实、观点、标题层级与列表结构不变，让表达更自然口语化。直接输出润色后的完整文章。"
+            if tone:
+                instruction += f"\n文风要求：{tone}"
+            if humanize:
+                instruction += "\n额外要求：强化真人感表达。"
+            polished = _strip_tool_markup(
+                str(complete(system, f"{instruction}\n\n{markdown}", temperature=0.6) or ""),
+            ).strip()
+            self._ensure_not_stopping(run_id)
+            if len(polished) < len(markdown) * 0.5:
+                self._node_completed(
+                    run_id, "natural-style",
+                    {"skipped": True, "reason": "output-invalid"},
+                )
+                return committed
+            if polished != markdown:
+                committed = self._commit_stage(
+                    run_id, article_id, str(current.get("title") or ""),
+                    polished, "natural-style 润色", owner_user_id, current,
+                )
+            self._node_completed(run_id, "natural-style", {"changed": polished != markdown})
+            return committed
+        except (WriterStopped, ArticleConflictError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - 润色失败保留草稿
+            self._node_completed(
+                run_id, "natural-style", {"skipped": True, "reason": str(exc)[:200]},
+            )
+            return committed
+
+    def _stage_review(
+        self, run_id: str, article_id: str, committed: dict,
+        owner_user_id: str | None,
+    ) -> dict:
+        """review 节点：LLM 审阅评分，revise 时做一轮修订。"""
+        self._node_started(run_id, "review")
+        try:
+            current = committed
+            markdown = str(current.get("markdown") or "")
+            review = self._llm_json(_load_prompt("review"), f"文章：\n{markdown[:30000]}")
+            score = int(review.get("score") or 0)
+            issues = [str(i) for i in (review.get("issues") or []) if str(i).strip()]
+            verdict = str(review.get("verdict") or ("pass" if score >= 80 else "revise"))
+            if verdict == "revise" and issues:
+                complete = getattr(self.llm, "complete", None)
+                if callable(complete):
+                    fix_prompt = (
+                        "请按审阅意见修订文章：只修复意见指出的问题，"
+                        "保持 Markdown 结构，直接输出修订后的完整文章。\n\n"
+                        "审阅意见：\n" + "\n".join(f"- {i}" for i in issues)
+                        + "\n\n文章：\n" + markdown
+                    )
+                    revised = _strip_tool_markup(
+                        str(complete(
+                            "你是资深中文编辑，只输出修订后的完整 Markdown 文章。",
+                            fix_prompt, temperature=0.6,
+                        ) or ""),
+                    ).strip()
+                    self._ensure_not_stopping(run_id)
+                    if len(revised) > len(markdown) * 0.5 and revised != markdown:
+                        committed = self._commit_stage(
+                            run_id, article_id, str(current.get("title") or ""),
+                            revised, "review 修订", owner_user_id, current,
+                        )
+            self._node_completed(
+                run_id, "review", {"score": score, "issues": len(issues), "issueDetails": issues, "verdict": verdict},
+            )
+            return committed
+        except (WriterStopped, ArticleConflictError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - 审阅失败不阻断
+            self._node_completed(
+                run_id, "review", {"skipped": True, "reason": str(exc)[:200]},
+            )
+            return committed
+
+    def _stage_reference_safety(
+        self, run_id: str, article_id: str, committed: dict,
+        research: str, owner_user_id: str | None,
+    ) -> dict:
+        """reference-safety 节点：对照资料核验断言，问题严重时做一轮修正。"""
+        self._node_started(run_id, "reference-safety")
+        try:
+            if not research or research.startswith("（无额外资料"):
+                self._node_completed(
+                    run_id, "reference-safety", {"skipped": True, "reason": "no-references"},
+                )
+                return committed
+            current = committed
+            markdown = str(current.get("markdown") or "")
+            check = self._llm_json(
+                _load_prompt("reference_safety"),
+                f"已整理资料：\n{research[:8000]}\n\n文章：\n{markdown[:30000]}",
+            )
+            ok = bool(check.get("ok", True))
+            issues = [str(i) for i in (check.get("issues") or []) if str(i).strip()]
+            if not ok and issues:
+                complete = getattr(self.llm, "complete", None)
+                if callable(complete):
+                    fix_prompt = (
+                        "资料核验发现以下断言缺乏依据或与资料矛盾，"
+                        "请修正或删除这些断言（不要引入新事实），"
+                        "保持 Markdown 结构，直接输出完整修正后的文章。\n\n"
+                        "需修正的断言：\n" + "\n".join(f"- {i}" for i in issues)
+                        + "\n\n文章：\n" + markdown
+                    )
+                    fixed = _strip_tool_markup(
+                        str(complete(
+                            "你是严谨的中文编辑，只输出修正后的完整 Markdown 文章。",
+                            fix_prompt, temperature=0.5,
+                        ) or ""),
+                    ).strip()
+                    self._ensure_not_stopping(run_id)
+                    if len(fixed) > len(markdown) * 0.5 and fixed != markdown:
+                        committed = self._commit_stage(
+                            run_id, article_id, str(current.get("title") or ""),
+                            fixed, "reference-safety 修正", owner_user_id, current,
+                        )
+            self._node_completed(
+                run_id, "reference-safety", {"ok": ok, "issues": len(issues), "issueDetails": issues},
+            )
+            return committed
+        except (WriterStopped, ArticleConflictError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - 核验失败不阻断
+            self._node_completed(
+                run_id, "reference-safety", {"skipped": True, "reason": str(exc)[:200]},
+            )
+            return committed
+
+    def _stage_risk(self, run_id: str, article_id: str, committed: dict) -> None:
+        """risk 节点：内容合规检查，仅记录结论（当前不自动改写）。"""
+        self._node_started(run_id, "risk")
+        try:
+            current = committed
+            markdown = str(current.get("markdown") or "")
+            check = self._llm_json(
+                _load_prompt("risk"), f"文章：\n{markdown[:30000]}",
+            )
+            level = str(check.get("level") or "low")
+            issues = [str(i) for i in (check.get("issues") or []) if str(i).strip()]
+            self._node_completed(
+                run_id, "risk", {"level": level, "issues": len(issues), "issueDetails": issues},
+            )
+        except (WriterStopped, ArticleConflictError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - 风险检查失败不阻断
+            self._node_completed(
+                run_id, "risk", {"level": "unknown", "skipped": True, "reason": str(exc)[:200]},
+            )
 
     def _ensure_not_stopping(self, run_id: str) -> None:
         run = self.journal.get_run(run_id)

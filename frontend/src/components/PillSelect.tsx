@@ -15,6 +15,8 @@ interface PillSelectProps<T extends string> {
   options: Array<PillSelectOption<T>>;
   title?: string;
   value: T;
+  /** "field"：表单字段样式（全宽带边框，弹窗内使用）；默认药丸样式。 */
+  variant?: "pill" | "field";
 }
 
 export function PillSelect<T extends string>({
@@ -24,6 +26,7 @@ export function PillSelect<T extends string>({
   options,
   title,
   value,
+  variant = "pill",
 }: PillSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -48,7 +51,7 @@ export function PillSelect<T extends string>({
 
   return (
     <div
-      className={`creation-toolbar__choice creation-pill-select${open ? " is-open" : ""}`}
+      className={`creation-pill-select${variant === "field" ? " creation-pill-select--field" : " creation-toolbar__choice"}${open ? " is-open" : ""}`}
       ref={rootRef}
       title={title}
     >
@@ -60,7 +63,7 @@ export function PillSelect<T extends string>({
         onClick={() => setOpen((v) => !v)}
         type="button"
       >
-        <span>{label}</span>
+        {variant === "pill" && <span>{label}</span>}
         <strong>{current}</strong>
         <ChevronDown aria-hidden="true" size={14} />
       </button>

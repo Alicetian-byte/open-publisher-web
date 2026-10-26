@@ -13,6 +13,8 @@ import {
 import { MarkdownWorkbench, type ImageInsertion, type MarkdownSelection, type PreviewPlatform } from "../components/article/MarkdownWorkbench";
 import { ArticleImagePane, type ArticleFigure } from "../components/article/ArticleImagePane";
 import { InsertPositionDialog } from "../components/article/InsertPositionDialog";
+import ArticleRunTimeline from "../components/ArticleRunTimeline";
+import { articleNodeLabel } from "../workflow/articleNodes";
 import { insertMarkdownAtLine, moveMarkdownSpanToLine, removeMarkdownSpan } from "../components/article/articleMarkdown";
 
 // 文章库：蓝本 ArticlesPage 的 Web 版核心闭环（团队自有代码）。
@@ -69,6 +71,7 @@ const JOURNAL_LABELS: Record<string, string> = {
   "agent.message_delta": "写作 Agent 正在撰写正文……",
   "article.checkpointed": "正文初稿已生成（不可变版本）",
   "revision.committed": "文章已保存新版本",
+
   "rewrite.candidate_ready": "改写候选已生成",
 };
 
@@ -80,6 +83,10 @@ function journalEventState(type: string): "running" | "complete" | "failed" {
 
 function journalEventMessage(type: string, payload: Record<string, unknown>): string {
   const message = payload.message ?? payload.stage ?? payload.reason;
+  if (type === "node.started" || type === "node.completed") {
+    const verb = type === "node.started" ? "开始" : "完成";
+    return `${verb}：${articleNodeLabel(payload.nodeId as string | undefined)}`;
+  }
   return JOURNAL_LABELS[type] ?? (typeof message === "string" ? message : type);
 }
 
@@ -105,6 +112,8 @@ export default function ArticlesPage() {
   const [humanize, setHumanize] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEventItem[]>([]);
+  // 方案2：文章工作流节点状态（node.completed 事件驱动）
+  const [completedNodes, setCompletedNodes] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -252,6 +261,7 @@ export default function ArticlesPage() {
     }
     setError(null);
     setEvents([]);
+    setCompletedNodes(new Set());
     setRunning(true);
     setCreating(false);
     const articleId = `article-${Date.now()}`;
@@ -283,6 +293,10 @@ export default function ArticlesPage() {
       esRef.current = bridge.openRunStream(run.id, {
         onEvent: (event) => {
           setEvents((prev) => [...prev, event as RunEventItem]);
+          if (event.type === "node.completed") {
+            const nodeId = (event.payload as { nodeId?: string } | undefined)?.nodeId;
+            if (nodeId) setCompletedNodes((prev) => new Set(prev).add(nodeId));
+          }
           if (
             event.type === "agent.message_delta"
             && (event.payload as { stage?: string; delta?: string } | undefined)?.stage === "content"
@@ -755,6 +769,7 @@ export default function ArticlesPage() {
           {!creating && runId && (
             <div>
               <span className="page-kicker">创作运行</span>
+              <ArticleRunTimeline completedNodeIds={completedNodes} events={events} stopped={!running} runFailed={runFailed} visualState="hidden" />
               <ol aria-label="创作事件" className="workflow-task__events" style={{ marginTop: 8 }}>
                 {events.map((event) => {
                   const state = journalEventState(event.type);

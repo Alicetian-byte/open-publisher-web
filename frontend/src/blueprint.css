@@ -8467,6 +8467,58 @@ select optgroup {
   color: var(--accent);
 }
 
+/* ---- 表单字段变体：弹窗内使用，触发器对齐 .field input 观感，菜单沿用自绘圆角列表 ---- */
+
+.creation-pill-select--field {
+  width: 100%;
+}
+
+.creation-pill-select--field .creation-pill-select__trigger {
+  width: 100%;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.creation-pill-select--field .creation-pill-select__trigger strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creation-pill-select--field .creation-pill-select__trigger:hover {
+  border-color: var(--border-strong);
+}
+
+.creation-pill-select--field.is-open .creation-pill-select__trigger {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.creation-pill-select--field .creation-pill-select__menu {
+  width: 100%;
+  min-width: 0;
+  z-index: 200;
+  border-radius: 14px;
+}
+
+.creation-pill-select--field .creation-pill-select__item {
+  padding: 9px 10px;
+  border-radius: 9px;
+  font-size: 13px;
+  white-space: normal;
+}
+
 /* ---- Landing Page（阶段 4） ---- */
 
 .landing-page {
@@ -8713,3 +8765,13 @@ select optgroup {
 .article-figures__menu button + button {
   border-top: 1px solid var(--border);
 }
+/* 创作输入框保持可见描边（用户回归反馈）：应用框架主题在部分状态下会将其
+   透明化，这里用更高优先级兜底，聚焦态仍走 accent 光晕规则。 */
+.page--create .creation-composer:not(:focus-within) {
+  border-color: var(--border-strong);
+}
+
+.workflow-node-details { font-size: 12px; max-width: 280px; overflow-wrap: anywhere; }
+.workflow-node-details div { display: flex; gap: 8px; margin: 5px 0; }
+.workflow-node-details dt { flex-shrink: 0; }
+.workflow-node-details dd { margin: 0; }

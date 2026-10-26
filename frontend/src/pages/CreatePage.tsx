@@ -14,6 +14,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { PillSelect } from "../components/PillSelect";
+import ArticleRunTimeline from "../components/ArticleRunTimeline";
+import { articleNodeLabel } from "../workflow/articleNodes";
 import { bridge } from "../lib/bridge";
 
 // 蓝本 CreatePage 的 Web 迁移（团队自有代码，1:1 结构与类名）。
@@ -151,6 +153,9 @@ export default function CreatePage() {
   const [runArticleId, setRunArticleId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEventItem[]>([]);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "succeeded" | "failed">("idle");
+  // 方案2：文章工作流节点状态（node.completed 事件驱动）+ 前端配图阶段状态。
+  const [completedNodes, setCompletedNodes] = useState<Set<string>>(new Set());
+  const [visualState, setVisualState] = useState<"hidden" | "running" | "done" | "failed">("hidden");
   const [runError, setRunError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   // 配图数量编辑草稿：弹窗打开时同步，避免 0 占位导致需要先删 0 再输入
@@ -178,13 +183,7 @@ export default function CreatePage() {
 
 
   useEffect(() => {
-    if (!user) return;
-    api.get<{ templates: MarkdownTemplate[] }>("/templates")
-      .then((res) => setTemplates(res.data.templates ?? []))
-      .catch(() => setTemplates([]));
-    api.get<{ assets: MediaAsset[] }>("/media")
-      .then((res) => setMediaAssets(res.data.assets ?? []))
-      .catch(() => setMediaAssets([]));
+    // 模型目录是公共展示信息（免登录可读）：无论是否登录都加载，避免未登录显示"未配置模型"。
     api.get<{ profiles: ModelProfile[] }>("/settings/profiles")
       .then((res) => {
         const list = res.data.profiles ?? [];
@@ -195,6 +194,13 @@ export default function CreatePage() {
     api.get<{ models: ImageModelOption[] }>("/settings/image-models")
       .then((res) => setImageModels(res.data.models ?? []))
       .catch(() => setImageModels([]));
+    if (!user) return;
+    api.get<{ templates: MarkdownTemplate[] }>("/templates")
+      .then((res) => setTemplates(res.data.templates ?? []))
+      .catch(() => setTemplates([]));
+    api.get<{ assets: MediaAsset[] }>("/media")
+      .then((res) => setMediaAssets(res.data.assets ?? []))
+      .catch(() => setMediaAssets([]));
     return () => {
       esRef.current?.close();
     };
@@ -280,6 +286,7 @@ export default function CreatePage() {
   const runVisualInsertion = async (aid: string) => {
     const push = (message: string) =>
       setEvents((prev) => [...prev, { key: `visual-${Date.now()}-${prev.length}`, eventType: "visual.status", message }]);
+    setVisualState("running");
     try {
       push("正在规划正文配图……");
       const plan = await api.post<VisualPlanSummary>(`/articles/${aid}/visual-plan`, {
@@ -288,6 +295,7 @@ export default function CreatePage() {
       });
       if (plan.data.placements.length === 0) {
         push("视觉规划认为本文不需要配图。");
+        setVisualState("done");
         return;
       }
       const usingLibrary = plan.data.placements.filter((p) => p.source === "existing_asset").length;
@@ -296,6 +304,7 @@ export default function CreatePage() {
       const state = await api.get<{ articleId: string; currentRevisionId: string | null; contentHash: string | null }>(`/articles/${aid}`);
       if (!state.data.currentRevisionId || !state.data.contentHash) {
         push("文章尚未保存，无法插入配图。");
+        setVisualState("failed");
         return;
       }
       const applied = await api.post<{ insertedCount: number; skipped: Array<{ reason: string }> }>(
@@ -308,8 +317,10 @@ export default function CreatePage() {
         },
       );
       push(`配图完成：已插入 ${applied.data.insertedCount} 张${applied.data.skipped.length ? `，跳过 ${applied.data.skipped.length} 张` : ""}。`);
+      setVisualState("done");
     } catch {
       push("自动配图失败（生图模型未配置或素材匹配为空），正文已正常保存。");
+      setVisualState("failed");
     }
   };
 
@@ -326,6 +337,8 @@ export default function CreatePage() {
     setValidation(null);
     setRunError(null);
     setEvents([]);
+    setCompletedNodes(new Set());
+    setVisualState("hidden");
     setRunStatus("running");
 
     const sections: string[] = [topic.trim()];
@@ -372,6 +385,10 @@ export default function CreatePage() {
       esRef.current = bridge.openRunStream(run.id, {
         onEvent: (event) => {
           setEvents((prev) => [...prev, event as RunEventItem]);
+          if (event.type === "node.completed") {
+            const nodeId = (event.payload as { nodeId?: string } | undefined)?.nodeId;
+            if (nodeId) setCompletedNodes((prev) => new Set(prev).add(nodeId));
+          }
           if (event.type === "run.completed") {
             setRunStatus("succeeded");
             if (imagePlanMode === "auto" || selectedMediaIds.length > 0) {
@@ -552,10 +569,27 @@ export default function CreatePage() {
               )}
             </header>
             {runError && <p role="alert">{runError}</p>}
+            <ArticleRunTimeline
+              completedNodeIds={completedNodes} events={events} stopped={runStatus === "stopped"}
+              runFailed={runStatus === "failed"}
+              visualState={imagePlanMode === "auto" || selectedMediaIds.length > 0 ? visualState : "hidden"}
+            />
             <ol aria-label="本次创作事件">
-              {events.slice(-40).map((event) => (
-                <li key={event.key}>{event.message || event.eventType}</li>
-              ))}
+              {events.slice(-40).map((event) => {
+                const nodeId = (event.payload as { nodeId?: string } | undefined)?.nodeId;
+                const nodeLabel = nodeId ? articleNodeLabel(nodeId) : "";
+                const nodeText =
+                  event.eventType === "node.started"
+                    ? `开始：${nodeLabel}`
+                    : event.eventType === "node.completed"
+                      ? `完成：${nodeLabel}`
+                      : "";
+                return (
+                  <li key={event.key}>
+                    {event.message || nodeText || event.eventType}
+                  </li>
+                );
+              })}
             </ol>
           </div>
         )}
@@ -631,36 +665,41 @@ export default function CreatePage() {
               <button aria-label="关闭" className="icon-button" onClick={() => setPicker(null)} type="button"><X size={18} /></button>
             </header>
             <div className="creation-settings-form">
-              <label className="field">
+              <div className="field">
                 <span>配图方式</span>
-                <select
-                  className="creation-select"
-                  onChange={(event) => setImagePlanMode(event.target.value as "auto" | "none")}
+                <PillSelect
+                  ariaLabel="配图方式"
+                  label="配图方式"
+                  onChange={setImagePlanMode}
+                  options={[
+                    { id: "auto" as const, label: "自动" },
+                    { id: "none" as const, label: "不配图" },
+                  ]}
                   value={imagePlanMode}
-                >
-                  <option value="auto">自动</option>
-                  <option value="none">不配图</option>
-                </select>
-              </label>
+                  variant="field"
+                />
+              </div>
               {imagePlanMode === "auto" && (
-                <label className="field">
+                <div className="field">
                   <span>生图模型（可选）</span>
-                  <select
-                    className="creation-select"
-                    onChange={(event) => setSelectedImageModelId(event.target.value)}
+                  <PillSelect
+                    ariaLabel="生图模型"
+                    label="生图模型"
+                    onChange={setSelectedImageModelId}
+                    options={[
+                      { id: "", label: "跟随系统配置（默认）" },
+                      ...imageModels.map((model) => ({
+                        id: model.id,
+                        label: `${model.name} · ${model.model}${model.keyConfigured ? "" : "（缺少密钥）"}`,
+                      })),
+                    ]}
                     value={selectedImageModelId}
-                  >
-                    <option value="">跟随系统配置（默认）</option>
-                    {imageModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name} · {model.model}{model.keyConfigured ? "" : "（缺少密钥）"}
-                      </option>
-                    ))}
-                  </select>
+                    variant="field"
+                  />
                   {imageModels.length === 0 && (
                     <small>暂无已配置生图模型；未在管理端配置生图时无法自动生成图片。</small>
                   )}
-                </label>
+                </div>
               )}
               {imagePlanMode === "auto" && (
                 <label className="field">
