@@ -12,7 +12,7 @@
 
 前置条件：
 - 数据库已建表（alembic upgrade head，需含 0015_app_secrets）；
-- SECRET_ENCRYPTION_KEY 已配置（未配置会拒绝执行，避免开发回退密钥入库）。
+- SECRET_ENCRYPTION_KEY 已配置（未配置会拒绝执行）。
 """
 
 import argparse
@@ -73,7 +73,7 @@ def main() -> int:
             secret_store.set_secret(db, secret_id, value, actor="migrate-env-script")
             print(f"已写入 app_secrets[{secret_id}]：{secret_box.mask(value)}")
             written += 1
-    print(f"完成：写入 {written} 条。现在可从 .env 中移除对应明文 key（保留变量名为回退）。")
+    print(f"完成：写入 {written} 条。现在必须从 .env / 部署环境中移除对应明文 key；运行时不再回退。")
     return 0
 
 

@@ -2,7 +2,7 @@
 
 升级后对齐蓝本工具循环语义：
 - 系统提示 = 蓝本 system.v1.md 原文（write_article 工具约定此时真实成立）
-- 模型在工具循环中可调用 github_repository / web_search（若配置 TAVILY_API_KEY）
+- 模型在工具循环中可调用 github_repository / web_search（若管理端已录入集成密钥）
   收集事实，最后必须调用 write_article 提交成品；提交即创建不可变修订并终止，
   对话/研究内容永远不会混进正文。
 - 客户端不支持工具循环时回退单轮：附加输出契约 + 工具标记清洗闸门后入库。
@@ -167,7 +167,6 @@ def _github_repository_summary(repository: str, token: str = "") -> str:
 
 def _web_search_summary(query: str, api_key: str = "") -> str:
     """蓝本 web_search 工具（Tavily）；未配置 Key 或失败时明确降级。"""
-    api_key = api_key or os.environ.get("TAVILY_API_KEY", "")
     q = query.strip()
     if not api_key or not q:
         return "联网检索当前不可用。请继续依据已有资料写作，不要编造检索结果。"

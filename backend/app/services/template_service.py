@@ -195,7 +195,7 @@ class TemplateService:
         if not getattr(llm, "api_key_configured", True):
             raise ValueError(
                 "未配置模型 API Key：请到设置页激活模型档案，"
-                "并确认后端容器已注入档案对应的环境变量。"
+                "并在管理端录入数据库加密密钥。"
             )
         data = llm.complete_json(system, f"参考文章：\n\n{markdown[:120_000]}")
         for key, kind in [("styleProfile", dict), ("structureProfile", dict), ("layoutProfile", dict), ("fixedBlocks", list), ("variables", list)]:

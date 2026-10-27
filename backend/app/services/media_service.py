@@ -112,7 +112,7 @@ class MediaService:
     def generate(self, *, prompt: str, size: str = "1024x1024",
                  owner_user_id: str | None = None,
                  image_profile_id: str | None = None) -> dict:
-        """OpenAI 兼容 images API；密钥来自环境变量。"""
+        """OpenAI 兼容 images API；密钥来自数据库加密存储。"""
         from fastapi import HTTPException
 
         from app.services.model_profile_service import resolve_image_config
@@ -121,7 +121,7 @@ class MediaService:
         if not resolved["api_key"]:
             raise HTTPException(
                 status_code=501,
-                detail="图片生成需要先在管理端配置生图模型（或后端 IMAGE_API_KEY / LLM_API_KEY）",
+                detail="图片生成需要先在管理端配置生图模型并录入数据库加密密钥",
             )
         from openai import OpenAI
 

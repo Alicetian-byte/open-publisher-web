@@ -91,20 +91,21 @@ class FakeOptimizeLLM:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
+    api_key_configured = True
+
     def complete_json(self, system: str, user: str, *, temperature: float = 0.7) -> dict:
         self.calls.append({"system": system, "user": user, "temperature": temperature})
         return {"content": "优化后的推文内容。", "notes": "更精简了"}
 
 
-class _NoKeySettings:
-    llm_api_key = ""
+class FakeNoKeyLLM:
+    api_key_configured = False
 
 
-def test_optimize_revision_flow(client: TestClient, monkeypatch):
+def test_optimize_revision_flow(client: TestClient):
     import app.api.revisions as revisions_mod
 
     fake = FakeOptimizeLLM()
-    monkeypatch.setattr(revisions_mod, "get_settings", lambda: type("_S", (), {"llm_api_key": "test-key"})())
     app.dependency_overrides[revisions_mod.get_llm_client] = lambda: fake
     try:
         res = client.post("/api/projects", json={"name": "Opt Product"})
@@ -146,22 +147,23 @@ def test_optimize_revision_flow(client: TestClient, monkeypatch):
         app.dependency_overrides.pop(revisions_mod.get_llm_client, None)
 
 
-def test_optimize_requires_llm_key(client: TestClient, monkeypatch):
+def test_optimize_requires_llm_key(client: TestClient):
     import app.api.revisions as revisions_mod
 
-    monkeypatch.setattr(revisions_mod, "get_settings", lambda: _NoKeySettings())
+    app.dependency_overrides[revisions_mod.get_llm_client] = lambda: FakeNoKeyLLM()
+    try:
+        res = client.post("/api/projects", json={"name": "NoKey Product"})
+        project_id = res.json()["id"]
+        res = client.post(
+            f"/api/projects/{project_id}/revisions",
+            json={"content": "原始推文"},
+        )
+        revision_id = res.json()["id"]
 
-    res = client.post("/api/projects", json={"name": "NoKey Product"})
-    project_id = res.json()["id"]
-    res = client.post(
-        f"/api/projects/{project_id}/revisions",
-        json={"content": "原始推文"},
-    )
-    revision_id = res.json()["id"]
-
-    res = client.post(
-        f"/api/revisions/{revision_id}/optimize",
-        json={"direction": "shorter"},
-    )
-    assert res.status_code == 503
-
+        res = client.post(
+            f"/api/revisions/{revision_id}/optimize",
+            json={"direction": "shorter"},
+        )
+        assert res.status_code == 503
+    finally:
+        app.dependency_overrides.pop(revisions_mod.get_llm_client, None)

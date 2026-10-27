@@ -132,7 +132,7 @@ export default function MediaPage() {
       await load();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(typeof detail === "string" ? detail : "图片生成失败（需配置 IMAGE_API_KEY 或 LLM_API_KEY）。");
+      setError(typeof detail === "string" ? detail : "图片生成失败（需在管理端配置并录入数据库加密密钥）。");
     } finally {
       setGenerating(false);
     }

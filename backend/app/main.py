@@ -42,6 +42,9 @@ app.include_router(publishing.router, prefix="/api", dependencies=[Depends(requi
 def recover_interrupted_runtime():
     """蓝本 openRuntimeDatabase 的启动恢复：重启后未完成的运行/发布标记为
     interrupted / unknown，等待用户核验，绝不盲目重试。"""
+    from app.core.secret_box import get_fernet
+
+    get_fernet()
     from app.db.session import SessionLocal
     from app.services.publish_outbox import recover_interrupted
 

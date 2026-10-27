@@ -27,12 +27,7 @@ class Settings(BaseSettings):
     auth_admin_display_name: str = "系统管理员"
 
 
-    # LLM（OpenAI 兼容接口；密钥支持 DB 加密存储 app_secrets，环境变量仅作回退/开发）
-    # 兼容 LLM_API_KEY 与 OPENAI_API_KEY 两种命名（后者为 .env.example 中的习惯写法）
-    llm_api_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("LLM_API_KEY", "OPENAI_API_KEY"),
-    )
+    # LLM（OpenAI 兼容接口；API Key 只存数据库 app_secrets）
     llm_base_url: str = Field(
         default="https://api.openai.com/v1",
         validation_alias=AliasChoices("LLM_BASE_URL", "OPENAI_BASE_URL"),
@@ -43,11 +38,7 @@ class Settings(BaseSettings):
     )
     llm_timeout_seconds: int = 120
 
-    # 生图链路：独立于文本 LLM，未显式配置时回退 LLM_* / OPENAI_*
-    image_api_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("IMAGE_API_KEY", "OPENAI_IMAGE_API_KEY"),
-    )
+    # 生图链路：独立于文本 LLM；未显式配置时沿用 LLM 非敏感默认值
     image_base_url: str = Field(
         default="",
         validation_alias=AliasChoices("IMAGE_BASE_URL", "OPENAI_IMAGE_BASE_URL"),
@@ -62,7 +53,7 @@ class Settings(BaseSettings):
     )
 
     # 密钥信封主密钥（KEK）：Fernet 密钥，加密 app_secrets 中的密钥密文。
-    # 生产必须显式配置；未配置时开发回退从 auth_jwt_secret 派生。
+    # 必须显式配置；未配置时拒绝加密/解密，不提供开发回退。
     secret_encryption_key: str = Field(
         default="",
         validation_alias=AliasChoices("SECRET_ENCRYPTION_KEY", "SECRET_MASTER_KEY"),
@@ -86,5 +77,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-

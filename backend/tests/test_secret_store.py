@@ -104,20 +104,19 @@ def test_profile_resolution_prefers_db_secret(secret_engine):
             provider="custom",
             base_url="https://api.example.com/v1",
             model_id="test-model",
-            api_key_env="DEFINITELY_UNSET_ENV_VAR",
             timeout_seconds=30,
             is_default=True,
         )
         db.add(profile)
         db.commit()
 
-        # 未录入密钥：回退全局 Settings（测试环境为空）→ keySource none
+        # 未录入密钥：无数据库密钥 → keySource none
         resolved = secret_store  # noqa: F841 - 占位保持可读
         from app.services.model_profile_service import resolve_llm_profile_config
         config = resolve_llm_profile_config(db, profile_id="mp-sectest")
         assert config["keySource"] == "none"
 
-        # 录入 DB 密钥后优先于（不存在的）环境变量
+        # 录入 DB 密钥后按档案密钥解析
         secret_store.set_secret(db, secret_store.profile_secret_id("mp-sectest"), "sk-from-db-7777")
         config = resolve_llm_profile_config(db, profile_id="mp-sectest")
         assert config["api_key"] == "sk-from-db-7777"

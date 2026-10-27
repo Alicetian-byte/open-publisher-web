@@ -1,9 +1,10 @@
 """企业级密钥存储模型：密文入库（app_secrets）+ 变更审计（app_secret_audit）。
 
 秘密 id 约定：
-- ``llm:global``        全局文本 LLM 密钥（原 LLM_API_KEY 环境变量的 DB 版）
-- ``image:global``      全局生图密钥（原 IMAGE_API_KEY 环境变量的 DB 版）
+- ``llm:global``        全局文本 LLM 密钥全局文本模型密钥
+- ``image:global``      全局生图密钥全局生图密钥
 - ``profile:<id>``      模型档案级密钥（ModelProfile.id）
+- ``integration:<kind>`` 集成密钥（tavily / github 等）
 
 表里只有 Fernet 密文与掩码尾号，明文永不落库、不下发前端。
 """

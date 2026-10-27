@@ -6,15 +6,12 @@
   环境变量 / 宿主密钥管理，不进数据库、不进仓库。
 - 数据密文：Fernet token（AES-128-CBC + HMAC-SHA256），存数据库
   ``app_secrets`` 表；明文只在解密瞬间存在于进程内存。
-- 开发回退：未配置 ``SECRET_ENCRYPTION_KEY`` 时从 ``AUTH_JWT_SECRET``
-  派生主密钥，仅限本地开发与测试；生产部署必须显式配置专用密钥，
-  否则 JWT 密钥轮换会连带导致已入库密钥全部不可解。
+- 不设开发回退：未配置专用主密钥时拒绝加密/解密，避免把 JWT 密钥
+  复用为主密钥或在密钥轮换时破坏已入库密文。
 - 轮换：换新主密钥后旧密文不可解，需重新录入或用迁移脚本重加密
   （key_version 记录版本，便于排查）。
 """
 
-import base64
-import hashlib
 import logging
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -33,28 +30,23 @@ def generate_master_key() -> str:
     return Fernet.generate_key().decode()
 
 
-def _derive_fallback_key(secret: str) -> bytes:
-    return base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
-
-
 def get_fernet() -> Fernet:
-    """解析当前主密钥；显式配置优先，未配置时回退 JWT 密钥派生（开发用）。"""
+    """解析当前主密钥；未显式配置专用密钥时直接失败。"""
     settings = get_settings()
     explicit = (settings.secret_encryption_key or "").strip()
-    if explicit:
-        try:
-            return Fernet(explicit.encode())
-        except Exception as exc:  # noqa: BLE001 - 配置错误要给出清晰提示
-            raise SecretBoxError(
-                "SECRET_ENCRYPTION_KEY 不是合法的 Fernet 密钥；"
-                "可用 python -c \"from cryptography.fernet import Fernet; "
-                "print(Fernet.generate_key().decode())\" 生成"
-            ) from exc
-    logger.warning(
-        "SECRET_ENCRYPTION_KEY 未配置，回退从 AUTH_JWT_SECRET 派生主密钥"
-        "（仅限开发环境；生产部署必须显式配置）"
-    )
-    return Fernet(_derive_fallback_key(settings.auth_jwt_secret))
+    if not explicit:
+        raise SecretBoxError(
+            "SECRET_ENCRYPTION_KEY 未配置：API Key 只允许加密入库，"
+            "必须先配置专用 Fernet 主密钥"
+        )
+    try:
+        return Fernet(explicit.encode())
+    except Exception as exc:  # noqa: BLE001 - 配置错误要给出清晰提示
+        raise SecretBoxError(
+            "SECRET_ENCRYPTION_KEY 不是合法的 Fernet 密钥；"
+            "可用 python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\" 生成"
+        ) from exc
 
 
 def encrypt(plaintext: str) -> str:

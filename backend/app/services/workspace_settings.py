@@ -1,5 +1,4 @@
 """Per-user writing defaults and shared administrator integrations."""
-import os
 from app.models.settings_profile import WorkspacePreference
 from app.services.secret_store import get_secret
 
@@ -17,4 +16,4 @@ def write_preferences(db, key, value):
     return value
 
 def integration_key(db, kind):
-    return get_secret(db, "integration:" + kind) or os.environ.get({"tavily":"TAVILY_API_KEY", "github":"GITHUB_TOKEN"}[kind], "")
+    return get_secret(db, "integration:" + kind) or ""

@@ -99,8 +99,8 @@ npm run dev
 
 ## 秘密管理（企业级约定）
 
-- **LLM / 生图 API Key：密文入库**（2026-10-26 起）。管理端可直接录入密钥，后端用 Fernet 信封加密后存入 `app_secrets` 表，主密钥通过 `SECRET_ENCRYPTION_KEY` 环境变量注入；环境变量（`LLM_API_KEY` / `IMAGE_API_KEY`）保留为回退/开发路径。解析优先级：DB 密文 > 环境变量 > 全局回退。变更写入 `app_secret_audit` 审计表。
-- **主密钥**：`SECRET_ENCRYPTION_KEY`（Fernet key）只放 `.env` / 宿主环境变量，生产环境必须显式配置；未配置时开发环境回退从 `AUTH_JWT_SECRET` 派生（仅限本地）。
+- **LLM / 生图 / 集成 API Key：只密文入库**（2026-10-27 起）。管理端录入密钥，后端用 Fernet 信封加密后存入 `app_secrets` 表，主密钥通过 `SECRET_ENCRYPTION_KEY` 环境变量注入；不再读取 `LLM_API_KEY` / `IMAGE_API_KEY` 等环境变量。解析优先级：档案级 DB 密文 > 全局 LLM DB 密文。变更写入 `app_secret_audit` 审计表。
+- **主密钥**：`SECRET_ENCRYPTION_KEY`（Fernet key）只放 `.env` / 宿主环境变量，必须显式配置；未配置时后端拒绝加密/解密，不提供开发回退。存量环境可先用 `backend/scripts/migrate_env_keys_to_db.py` 一次性迁移，再移除明文 Key 环境变量。
 - 存量迁移：`backend/scripts/migrate_env_keys_to_db.py`（先干跑，确认后加 `--execute`）。
 - 其余秘密（数据库密码、JWT 密钥、管理员密码）仍通过 `.env` / 环境变量注入，参考 `.env.example` 占位模板；`.env` 已被 `.gitignore` 排除。
 - 密钥明文永不进入仓库、不回显浏览器、不写日志；管理端只见掩码尾号（keyHint）。

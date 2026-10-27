@@ -1,7 +1,7 @@
 """OpenAI 兼容聊天客户端封装。
 
 所有节点只依赖 complete_json 接口，方便测试时用 FakeLLM 替换。
-密钥一律来自环境变量（Settings.llm_api_key），不落仓库。
+API Key 只来自后端数据库 app_secrets 解密结果，不落仓库。
 """
 
 import json
@@ -69,7 +69,7 @@ class LLMClient:
 
     @property
     def api_key_configured(self) -> bool:
-        """激活档案或环境变量是否提供了 API Key。"""
+        """激活档案或全局数据库密钥是否提供了 API Key。"""
         return bool(self._api_key)
 
     def complete(

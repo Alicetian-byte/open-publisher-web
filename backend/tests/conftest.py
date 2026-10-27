@@ -1,6 +1,12 @@
 """pytest 公共夹具：FakeLLM、FakeEvents、SQLite 内存库。"""
 
+import os
+
+from cryptography.fernet import Fernet
 import pytest
+
+# API Key 只支持数据库加密存储；测试也必须配置专用主密钥。
+os.environ.setdefault("SECRET_ENCRYPTION_KEY", Fernet.generate_key().decode())
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

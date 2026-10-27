@@ -8,12 +8,11 @@ interface ModelStatus {
   baseUrl: string;
   model: string;
   keyConfigured: boolean;
-  keySource: "db" | "env" | "none";
+  keySource: "db" | "none";
   keyHint: string;
   timeoutSeconds: number;
   profileId: string | null;
   profileName: string | null;
-  apiKeyEnv: string;
 }
 
 interface ProfileOut {
@@ -22,9 +21,8 @@ interface ProfileOut {
   provider: string;
   baseUrl: string;
   modelId: string;
-  apiKeyEnv: string;
   keyConfigured: boolean;
-  keySource: "db" | "env" | "none";
+  keySource: "db" | "none";
   keyHint: string;
   timeoutSeconds: number;
   isDefault: boolean;
@@ -35,25 +33,22 @@ const emptyForm = {
   provider: "custom",
   baseUrl: "",
   modelId: "",
-  apiKeyEnv: "LLM_API_KEY",
   timeoutSeconds: 120,
 };
 
 interface ImageStatus {
   baseUrl: string;
   model: string;
-  apiKeyEnv: string;
   keyConfigured: boolean;
-  keySource: "db" | "env" | "none";
+  keySource: "db" | "none";
   keyHint: string;
   timeoutSeconds: number;
-  source: "db" | "env" | "fallback";
+  source: "db" | "fallback";
 }
 
 const emptyImageForm = {
   baseUrl: "",
   modelId: "",
-  apiKeyEnv: "IMAGE_API_KEY",
   timeoutSeconds: 180,
 };
 
@@ -176,7 +171,6 @@ function AiConfigPage() {
       setImageForm({
         baseUrl: image.baseUrl,
         modelId: image.model,
-        apiKeyEnv: image.apiKeyEnv,
         timeoutSeconds: image.timeoutSeconds,
       });
     } else {
@@ -215,7 +209,7 @@ function AiConfigPage() {
       await api.delete<ImageStatus>("/settings/image");
       setShowImageForm(false);
       await load();
-      setMessage("已恢复环境变量默认配置。");
+      setMessage("已恢复默认模型配置。");
     } catch {
       setError("重置失败。");
     } finally {
@@ -275,7 +269,7 @@ function AiConfigPage() {
     try {
       await api.delete("/settings/llm/key");
       await load();
-      setMessage("LLM 密钥已删除，回退环境变量。");
+      setMessage("LLM 密钥已删除；未配置档案密钥时将不可用。");
     } catch {
       setError("密钥删除失败。");
     } finally {
@@ -314,7 +308,7 @@ function AiConfigPage() {
     try {
       await api.delete("/settings/image/key");
       await load();
-      setMessage("生图密钥已删除，回退环境变量。");
+      setMessage("生图密钥已删除；可回退全局文本模型数据库密钥。");
     } catch {
       setError("密钥删除失败。");
     } finally {
@@ -353,7 +347,7 @@ function AiConfigPage() {
     try {
       await api.delete(`/settings/profiles/${id}/key`);
       await load();
-      setMessage("档案密钥已删除，回退环境变量。");
+      setMessage("档案密钥已删除；调用时将回退全局数据库密钥。");
     } catch {
       setError("密钥删除失败。");
     } finally {
@@ -391,9 +385,8 @@ function AiConfigPage() {
           <div className="config-grid">
             <div><small>API Base URL</small><strong>{status.baseUrl}</strong></div>
             <div><small>模型</small><strong>{status.model}</strong></div>
-            <div><small>密钥变量</small><strong>{status.apiKeyEnv}</strong></div>
-            <div><small>密钥状态</small><strong>{status.keyConfigured ? `已配置（${status.keySource === "db" ? "数据库加密" : "环境变量"}）` : "未配置"}</strong></div>
-            <div><small>生效档案</small><strong>{status.profileName ?? "全局环境变量"}</strong></div>
+            <div><small>密钥状态</small><strong>{status.keyConfigured ? "已配置（数据库加密）" : "未配置"}</strong></div>
+            <div><small>生效档案</small><strong>{status.profileName ?? "全局数据库密钥"}</strong></div>
             <div><small>超时</small><strong>{status.timeoutSeconds}s</strong></div>
           </div>
           <div className="admin-form" style={{ marginTop: 12 }}>
@@ -404,7 +397,7 @@ function AiConfigPage() {
             )}
           </div>
           {status.keyHint && (
-            <p className="muted">当前密钥 {status.keyHint}（来源：{status.keySource === "db" ? "数据库加密存储" : "环境变量"}）</p>
+            <p className="muted">当前密钥 {status.keyHint}（来源：数据库加密存储）</p>
           )}
           </>
         ) : (
@@ -430,7 +423,6 @@ function AiConfigPage() {
             <input onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="档案名称" required value={form.name} />
             <input onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="API Base URL，例如 https://api.openai.com/v1" required value={form.baseUrl} />
             <input onChange={(e) => setForm({ ...form, modelId: e.target.value })} placeholder="模型 ID，例如 gpt-4o-mini" required value={form.modelId} />
-            <input onChange={(e) => setForm({ ...form, apiKeyEnv: e.target.value })} placeholder="密钥环境变量名" value={form.apiKeyEnv} />
             <input min={1} onChange={(e) => setForm({ ...form, timeoutSeconds: Number(e.target.value) || 120 })} placeholder="超时秒数" type="number" value={form.timeoutSeconds} />
             <button className="primary" disabled={busy} type="submit">保存配置</button>
           </form>
@@ -441,7 +433,7 @@ function AiConfigPage() {
             <div className={profile.isDefault ? "profile active" : "profile"} key={profile.id}>
               <div>
                 <strong>{profile.isDefault && <Star color="#f59e0b" size={13} />} {profile.name}</strong>
-                <small>{profile.baseUrl} · {profile.modelId} · {profile.apiKeyEnv} · {profile.keyConfigured ? `Key 已配置（${profile.keySource === "db" ? "数据库" : "环境变量"}）${profile.keyHint}` : "Key 未配置"} · {profile.timeoutSeconds}s</small>
+                <small>{profile.baseUrl} · {profile.modelId} · {profile.keyConfigured ? `Key 已配置（数据库）${profile.keyHint}` : "Key 未配置"} · {profile.timeoutSeconds}s</small>
               </div>
               <div className="admin-form" style={{ marginTop: 8 }}>
                 <input autoComplete="new-password" onChange={(e) => setProfileKeyInputs({ ...profileKeyInputs, [profile.id]: e.target.value })} placeholder="录入该档案密钥（加密入库，不回显）" type="password" value={profileKeyInputs[profile.id] ?? ""} />
@@ -475,9 +467,8 @@ function AiConfigPage() {
             <div className="config-grid">
               <div><small>API Base URL</small><strong>{image.baseUrl}</strong></div>
               <div><small>模型</small><strong>{image.model}</strong></div>
-              <div><small>密钥变量</small><strong>{image.apiKeyEnv}</strong></div>
-              <div><small>密钥状态</small><strong>{image.keyConfigured ? `已配置（${image.keySource === "db" ? "数据库加密" : "环境变量"}）` : "未配置"}</strong></div>
-              <div><small>配置来源</small><strong>{image.source === "db" ? "管理端配置" : image.source === "env" ? "环境变量" : "回退文本模型"}</strong></div>
+                <div><small>密钥状态</small><strong>{image.keyConfigured ? "已配置（数据库加密）" : "未配置"}</strong></div>
+              <div><small>配置来源</small><strong>{image.source === "db" ? "管理端配置" : "回退默认模型配置"}</strong></div>
               <div><small>超时</small><strong>{image.timeoutSeconds}s</strong></div>
             </div>
             <div className="admin-form" style={{ marginTop: 12 }}>
@@ -488,14 +479,14 @@ function AiConfigPage() {
               )}
             </div>
             {image.keyHint && (
-              <p className="muted">当前生图密钥 {image.keyHint}（来源：{image.keySource === "db" ? "数据库加密存储" : "环境变量"}）</p>
+              <p className="muted">当前生图密钥 {image.keyHint}（来源：数据库加密存储）</p>
             )}
             <div className="section-head" style={{ marginTop: 12 }}>
-              <span className="muted">密钥支持两种方式：数据库加密存储（推荐）或后端环境变量；均不回显明文。</span>
+              <span className="muted">密钥只使用数据库加密存储；均不回显明文。</span>
               <div>
                 <button className="quiet" onClick={openImageForm} type="button">编辑配置</button>
                 {image.source === "db" && (
-                  <button className="quiet" disabled={busy} onClick={() => void resetImage()} type="button">恢复环境变量默认</button>
+                  <button className="quiet" disabled={busy} onClick={() => void resetImage()} type="button">恢复默认模型配置</button>
                 )}
               </div>
             </div>
@@ -508,7 +499,6 @@ function AiConfigPage() {
                 }}>
                 <input onChange={(e) => setImageForm({ ...imageForm, baseUrl: e.target.value })} placeholder="生图 API Base URL，例如 https://api.openai.com/v1" required value={imageForm.baseUrl} />
                 <input onChange={(e) => setImageForm({ ...imageForm, modelId: e.target.value })} placeholder="生图模型 ID，例如 gpt-image-1" required value={imageForm.modelId} />
-                <input onChange={(e) => setImageForm({ ...imageForm, apiKeyEnv: e.target.value })} placeholder="密钥环境变量名，默认 IMAGE_API_KEY" value={imageForm.apiKeyEnv} />
                 <input min={1} onChange={(e) => setImageForm({ ...imageForm, timeoutSeconds: Number(e.target.value) || 180 })} placeholder="超时秒数" type="number" value={imageForm.timeoutSeconds} />
                 <button className="primary" disabled={busy} type="submit">保存生图配置</button>
               </form>
@@ -522,8 +512,8 @@ function AiConfigPage() {
       <section className="admin-card">
         <h2>密钥安全约定</h2>
         <p className="muted">
-          企业级密钥约定（2026-10-26 起）：API Key 密文经 Fernet 信封加密存入后端数据库（app_secrets），主密钥通过 SECRET_ENCRYPTION_KEY 环境变量注入、不进仓库；环境变量密钥保留为回退/开发路径。明文不回显到浏览器，不进日志。
-          管理端填写 API 地址、模型、超时和密钥环境变量名；服务端会在运行时读取该变量。
+          企业级密钥约定（2026-10-27 起）：API Key 密文经 Fernet 信封加密存入后端数据库（app_secrets），主密钥通过 SECRET_ENCRYPTION_KEY 环境变量注入、不进仓库；不再提供 API Key 环境变量回退。明文不回显到浏览器，不进日志。
+          管理端只填写 API 地址、模型和超时；密钥一律通过独立的密钥录入接口加密入库。
         </p>
       </section>
 

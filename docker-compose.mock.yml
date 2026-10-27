@@ -1,4 +1,4 @@
-# Mock 模式覆盖文件：无真实 LLM Key 时做端到端验证/演示。
+# Mock 模式覆盖文件：无真实上游时做端到端验证/演示；仍需在管理端录入一个 mock 密钥。
 # 用法：docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build
 services:
   mock-llm:
@@ -10,5 +10,4 @@ services:
 
   backend:
     environment:
-      LLM_API_KEY: mock-key
       LLM_BASE_URL: http://mock-llm:8001/v1

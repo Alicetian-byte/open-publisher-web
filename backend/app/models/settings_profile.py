@@ -1,7 +1,7 @@
 """模型档案：蓝本 TextModelProfile / model-profile.ts 的 Web 版。
 
-蓝本 profile 通过 secretRef（env://）引用密钥；Web 版等价为
-api_key_env —— 指向后端进程环境变量名，密钥永不入库、不下发前端。
+API Key 不存模型档案表，统一加密存入 app_secrets；
+档案只承载 API 地址、模型、超时等非敏感配置。
 """
 
 from sqlalchemy import Boolean, DateTime, Integer, String, JSON, text
@@ -19,7 +19,6 @@ class ModelProfile(Base):
     provider: Mapped[str] = mapped_column(String(80), nullable=False, default="custom")
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    api_key_env: Mapped[str] = mapped_column(String(120), nullable=False, default="LLM_API_KEY")
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
     capabilities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -31,9 +30,7 @@ class ModelProfile(Base):
 class ImageConfig(Base):
     """生图模型配置：全局单行（id 固定 "global"）。
 
-    与 ModelProfile 同一密钥约定：只存环境变量名，密钥本体
-    永不入库、不下发前端。未建行时回退 IMAGE_* 环境变量，
-    再回退文本 LLM 配置。
+    API Key 同样只存 app_secrets；本行只保存 API 地址、模型、超时。
     """
 
     __tablename__ = "image_configs"
@@ -41,7 +38,6 @@ class ImageConfig(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    api_key_env: Mapped[str] = mapped_column(String(120), nullable=False, default="IMAGE_API_KEY")
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=180)
     updated_at: Mapped[object] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False

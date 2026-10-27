@@ -1,8 +1,7 @@
 """密钥存储服务：app_secrets 表读写 + 审计。
 
-解析优先级由调用方（model_profile_service）决定；本模块只负责
-加密存取与审计。解密失败（主密钥不匹配）返回 None 并记日志，
-让业务按"未配置"回退环境变量，而不是让整条链路 500。
+本模块只负责加密存取与审计。解密失败（主密钥不匹配）返回 None
+并记日志，让业务按"未配置"处理，而不是让整条链路 500。
 """
 
 import logging
@@ -48,7 +47,7 @@ def set_secret(
 
 
 def get_secret(db: Session, secret_id: str) -> str | None:
-    """解密取值；未配置或解密失败返回 None（调用方回退环境变量）。"""
+    """解密取值；未配置或解密失败返回 None（调用方按未配置处理）。"""
     row = db.get(AppSecret, secret_id)
     if row is None:
         return None
@@ -68,7 +67,7 @@ def get_secret_meta(db: Session, secret_id: str) -> dict | None:
 
 
 def delete_secret(db: Session, secret_id: str, *, actor: str | None = None) -> bool:
-    """删除秘密（回退环境变量），并写审计。返回是否真的删了。"""
+    """删除秘密并写审计。返回是否真的删了。"""
     row = db.get(AppSecret, secret_id)
     if row is None:
         return False

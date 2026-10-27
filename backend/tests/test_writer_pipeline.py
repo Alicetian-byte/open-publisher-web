@@ -360,7 +360,6 @@ def test_disabled_node_is_not_started(db, node):
 def test_off_blocks_research_and_unsolicited_tool_calls(db, monkeypatch):
     from app.services import writer_service as ws
     calls = []
-    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     monkeypatch.setattr(ws, "_web_search_summary", lambda q: calls.append(q))
     monkeypatch.setattr(ws, "_github_repository_summary", lambda q: calls.append(q))
     llm = FakeAgentLLM([

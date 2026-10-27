@@ -131,11 +131,10 @@ def optimize_revision(
             detail=f"未知的优化方向：{direction}，可选值：{sorted(_OPTIMIZE_DIRECTIONS)}",
         )
 
-    settings = get_settings()
-    if not settings.llm_api_key:
+    if not llm.api_key_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="未配置 LLM API Key（环境变量 llm_api_key），无法使用 AI 优化。",
+            detail="未配置 LLM API Key（数据库加密存储），无法使用 AI 优化。",
         )
 
     source = _get_revision_or_404(revision_id, db)
@@ -168,4 +167,3 @@ def optimize_revision(
     db.commit()
     db.refresh(revision)
     return revision
-

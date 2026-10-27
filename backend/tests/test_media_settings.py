@@ -102,13 +102,12 @@ def test_image_config_get_put_delete_roundtrip(client):
     initial = client.get("/api/settings/image")
     assert initial.status_code == 200
     body = initial.json()
-    assert body["source"] in ("fallback", "env")
+    assert body["source"] == "fallback"
 
     # 保存管理端配置 → source=db
     saved = client.put("/api/settings/image", json={
         "baseUrl": "https://img.example.com/v1",
         "modelId": "test-image-model",
-        "apiKeyEnv": "IMAGE_API_KEY",
         "timeoutSeconds": 90,
     })
     assert saved.status_code == 200
@@ -124,7 +123,7 @@ def test_image_config_get_put_delete_roundtrip(client):
 
     # 重置 → 回退
     assert client.delete("/api/settings/image").status_code == 200
-    assert client.get("/api/settings/image").json()["source"] in ("fallback", "env")
+    assert client.get("/api/settings/image").json()["source"] == "fallback"
 
 
 def test_image_config_requires_admin(client):
@@ -141,7 +140,7 @@ def test_image_test_without_key_returns_501(client, monkeypatch):
 
     monkeypatch.setattr(
         model_profile_service, "resolve_image_config",
-        lambda: {"apiKeyEnv": "IMAGE_API_KEY", "api_key": "", "base_url": "",
+        lambda: {"api_key": "", "base_url": "",
                  "model": "m", "timeout_seconds": 5, "source": "fallback"},
     )
     res = client.post("/api/settings/image/test")
