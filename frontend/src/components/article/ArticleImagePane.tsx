@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ImageIcon, ImageOff, LoaderCircle, MoreHorizontal, Plus, ScissorsLineDashed } from "lucide-react";
+import { BarChart3, ImageIcon, LoaderCircle, MoreHorizontal, Plus, ScissorsLineDashed } from "lucide-react";
 import { renderMermaidSvg } from "./MarkdownPreview";
 import { InsertPositionDialog } from "./InsertPositionDialog";
 import { markdownLineOfOffset, type MarkdownSpan } from "./articleMarkdown";
@@ -106,7 +106,14 @@ export function ArticleImagePane({
   onImageFileDrop,
   canInsert = true,
 }: ArticleImagePaneProps) {
-  const figures = useMemo(() => extractArticleFigures(markdown), [markdown]);
+  // 只展示可加载的图片（站内素材、data URL、blob、http）和 mermaid 图表；
+  // AI 编造的本地路径（images/xxx.jpg）不渲染占位容器。
+  const figures = useMemo(
+    () => extractArticleFigures(markdown).filter(
+      (figure) => figure.kind === "mermaid" || isEmbeddableImageSrc(figure.src),
+    ),
+    [markdown],
+  );
   const [uploads, setUploads] = useState<ImageInsertion[]>([]);
   const [isDropping, setIsDropping] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -210,37 +217,20 @@ export function ArticleImagePane({
                 onMouseLeave={() => setMenuFor((current) => (current === index ? null : current))}
               >
                 {figure.kind === "image" ? (
-                  isEmbeddableImageSrc(figure.src) ? (
-                    <button
-                      aria-label={`预览 ${figure.alt || `配图 ${index + 1}`}`}
-                      className="article-figures__thumb"
-                      onClick={() => setPreview({ src: figure.src, alt: figure.alt || `配图 ${index + 1}` })}
-                      title="点击预览"
-                      type="button"
-                    >
-                      <img alt={figure.alt || `配图 ${index + 1}`} src={figure.src} />
-                    </button>
-                  ) : (
-                    <div
-                      aria-label="图片源不可用"
-                      className="article-figures__missing"
-                      title="这是 AI 生成的本地图片路径，还没有上传或生成对应素材。"
-                    >
-                      <ImageOff aria-hidden="true" size={18} />
-                      <span>图片路径未上传</span>
-                    </div>
-                  )
+                  <button
+                    aria-label={`预览 ${figure.alt || `配图 ${index + 1}`}`}
+                    className="article-figures__thumb"
+                    onClick={() => setPreview({ src: figure.src, alt: figure.alt || `配图 ${index + 1}` })}
+                    title="点击预览"
+                    type="button"
+                  >
+                    <img alt={figure.alt || `配图 ${index + 1}`} src={figure.src} />
+                  </button>
                 ) : (
                   <MermaidThumb index={index} source={figure.source} />
                 )}
                 <figcaption
-                  title={
-                    figure.kind === "image"
-                      ? isEmbeddableImageSrc(figure.src)
-                        ? figure.alt || figure.src
-                        : `${figure.alt || figure.src}（源路径未上传）`
-                      : "创作生成的图表"
-                  }
+                  title={figure.kind === "image" ? figure.alt || figure.src : "创作生成的图表"}
                 >
                   {figureCaption(figure, index)}
                 </figcaption>

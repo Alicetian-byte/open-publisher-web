@@ -55,6 +55,8 @@ interface VisualPlanSummary {
   placements: VisualPlanPlacement[];
   sourceRevisionId: string | null;
   sourceContentHash: string | null;
+  /** 创作页选择的具体生图模型；手动触发时为空（走全局默认）。 */
+  imageModelId?: string | null;
 }
 
 interface VisualApplyResult {
@@ -357,6 +359,7 @@ export default function ArticlesPage() {
     const visualPlan = activeRun.visualPlan;
     const visualKey = `gaoliu.visual-applied:${activeRun.runId}`;
     void (async () => {
+      let pendingVisualPlan: VisualPlanSummary | null = null;
       if (visualPlan?.enabled && !sessionStorage.getItem(visualKey)) {
         sessionStorage.setItem(visualKey, "1");
         try {
@@ -365,21 +368,10 @@ export default function ArticlesPage() {
             { targetCount: visualPlan.targetCount, assetIds: visualPlan.assetIds },
           );
           if (plan.data.placements.length > 0) {
-            const state = await api.get<{
-              currentRevisionId: string | null;
-              contentHash: string | null;
-            }>(`/articles/${activeRun.articleId}`);
-            if (state.data.currentRevisionId && state.data.contentHash) {
-              await api.post(`/articles/${activeRun.articleId}/visual-apply`, {
-                baseRevisionId: state.data.currentRevisionId,
-                baseContentHash: state.data.contentHash,
-                placements: plan.data.placements,
-                imageModelId: visualPlan.imageModelId,
-              });
-            }
+            pendingVisualPlan = { ...plan.data, imageModelId: visualPlan.imageModelId };
           }
         } catch {
-          setError("自动配图失败；正文已正常保存。");
+          setError("自动配图规划失败；正文已正常保存。");
         }
       }
       try {
@@ -391,6 +383,11 @@ export default function ArticlesPage() {
         if (!userEditedRef.current) setDraft(article.markdown);
       } catch {
         void loadArticles();
+      }
+      // 文章已加载进编辑器后，弹出确认框让用户审核方案再真正生图。
+      if (pendingVisualPlan) {
+        setExcludedPlacementIds([]);
+        setVisualPlan(pendingVisualPlan);
       }
     })();
   }, [activeRun, followedRunArticleId, loadArticles, runStatus]);
@@ -523,6 +520,7 @@ export default function ArticlesPage() {
           baseRevisionId: selected.currentRevisionId,
           baseContentHash: selected.contentHash,
           placements,
+          imageModelId: visualPlan.imageModelId || null,
         },
       );
       setSelected(res.data.article);
