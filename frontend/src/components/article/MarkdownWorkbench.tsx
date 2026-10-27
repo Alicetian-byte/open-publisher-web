@@ -8,7 +8,8 @@ import {
   Quote,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { usePersistentState } from "../../lib/usePersistentState";
 import { MarkdownPreview } from "./MarkdownPreview";
 
 /**
@@ -134,6 +135,35 @@ export function MarkdownWorkbench({
   const [imageDropError, setImageDropError] = useState<string | null>(null);
   const [selectedText, setSelectedText] = useState<MarkdownSelection | null>(null);
   const [selectionActionPosition, setSelectionActionPosition] = useState<SelectionActionPosition | null>(null);
+
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  // 分栏比例（0.2–0.8，编辑区占比），拖拽分隔条调节并持久化。
+  const [splitRatio, setSplitRatio] = usePersistentState("opw.editor-split-ratio", 0.5);
+
+  const beginSplitDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("is-pane-dragging");
+    const onMove = (ev: PointerEvent) => {
+      const rect = surface.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const ratio = (ev.clientX - rect.left) / rect.width;
+      // 按像素保底：编辑区至少 180px、预览区至少 140px，避免拖到极限挤成单字竖排。
+      const minRatio = Math.min(0.5, 180 / rect.width);
+      const maxRatio = Math.max(0.5, 1 - 140 / rect.width);
+      setSplitRatio(Math.min(0.8, Math.max(0.2, Math.min(maxRatio, Math.max(minRatio, ratio)))));
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      document.body.classList.remove("is-pane-dragging");
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp, { once: true });
+    handle.addEventListener("pointercancel", onUp, { once: true });
+  };
   const lines = markdown.split("\n").length;
   const characters = markdown.replace(/\s/g, "").length;
 
@@ -354,7 +384,11 @@ export function MarkdownWorkbench({
         </div>
       </div>
 
-      <div className={`editor-surface editor-surface--${editorMode}`}>
+      <div
+        className={`editor-surface editor-surface--${editorMode}`}
+        ref={surfaceRef}
+        style={{ "--split-left": `${splitRatio}fr`, "--split-right": `${(1 - splitRatio).toFixed(4)}fr` } as CSSProperties}
+      >
         {editorMode !== "preview" && (
           <div className="source-editor">
             <div aria-hidden="true" className="source-editor__gutter">
@@ -413,6 +447,15 @@ export function MarkdownWorkbench({
               </button>
             )}
           </div>
+        )}
+        {editorMode === "split" && (
+          <div
+            aria-label="调节编辑与预览宽度"
+            aria-orientation="vertical"
+            className="pane-resizer"
+            onPointerDown={beginSplitDrag}
+            role="separator"
+          />
         )}
         {editorMode !== "edit" && (
           <div

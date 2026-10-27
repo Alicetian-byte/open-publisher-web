@@ -2240,6 +2240,21 @@ p {
   min-height: 0;
 }
 
+/* 文章板块内容：主内容纵向排列，编辑助手独立占用右侧列 */
+.article-editor__body > .workflow-task__failure,
+.article-editor__body > .article-run-strip,
+.article-editor__body > .article-editor__main,
+.article-editor__body > .empty-page {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.article-editor__body > .article-editor__assistant {
+  grid-column: 2;
+  grid-row: 1 / span 99;
+  min-width: 0;
+}
+
 /* 文章板块默认布局：编辑区（含预览）+ 右侧配图栏 */
 .article-editor__workspace {
   display: flex;
@@ -8776,22 +8791,66 @@ select optgroup {
 .workflow-node-details dt { flex-shrink: 0; }
 .workflow-node-details dd { margin: 0; }
 
-/* 文章运行条：创作页跳转到文章页后，时间线与正文输出同屏可见 */
+/* 文章运行条：压缩为横向进度芯片，不挤压正文编辑器 */
 .article-run-strip {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--surface-muted) 46%, var(--surface));
+}
+
+.article-run-strip .workflow-timeline {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0;
+  scrollbar-width: thin;
+}
+
+.article-run-strip .workflow-timeline__item {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 30px;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.article-run-strip .workflow-timeline__item::before {
+  display: none;
+}
+
+.article-run-strip .workflow-timeline__item small,
+.article-run-strip .workflow-timeline__item details {
+  display: none;
+}
+
+.article-run-strip .workflow-timeline__icon {
+  width: 22px;
+  height: 22px;
+}
+
+.article-run-strip .workflow-task__events {
+  display: none;
 }
 
 .article-run-strip__status {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .article-run-strip__status p {
@@ -9041,5 +9100,81 @@ select optgroup {
     flex: 1 1 100%;
     width: 100%;
     min-height: 360px;
+  }
+}
+
+/* ===== 可拖拽分栏（编辑/预览 + 文章库 + AI 修改栏 + 配图栏） ===== */
+
+.pane-resizer {
+  flex: 0 0 10px;
+  width: 10px;
+  min-height: 0;
+  align-self: stretch;
+  border-radius: 6px;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  transition: background 120ms ease;
+}
+
+.pane-resizer:hover,
+.pane-resizer.is-active {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+body.is-pane-dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* 分栏模式：编辑区 / 分隔条 / 预览区按比例分配（--split-left 为编辑区 fr 权重） */
+@media (min-width: 981px) {
+  .editor-surface--split {
+    grid-template-columns:
+      minmax(180px, var(--split-left, 1fr)) 10px
+      minmax(140px, var(--split-right, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .editor-surface--split .pane-resizer {
+    display: none;
+  }
+}
+
+/* 文章页侧栏包装层：宽度由包装层控制，内部面板自适应填满 */
+.article-editor__workbench {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.article-editor__pane {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 220px;
+  max-width: min(560px, 42vw);
+  min-height: 0;
+}
+
+.article-editor__pane--ai .article-ai-modify {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.article-editor__pane--figures .article-figures {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+@media (max-width: 1100px) {
+  .article-editor__workspace .pane-resizer {
+    display: none;
+  }
+
+  /* 折叠布局下侧栏占满整行（内联宽度用 !important 覆盖） */
+  .article-editor__pane,
+  .article-editor__pane--ai,
+  .article-editor__pane--figures {
+    width: 100% !important;
+    flex: 1 1 100%;
   }
 }

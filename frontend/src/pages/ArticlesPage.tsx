@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, Eye, FileText, FileUp, GripVertical, History, ImagePlus, LoaderCircle, Pencil, Plus, Save, Search, Sparkles, Undo2, Upload, XCircle } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useActiveRun } from "../lib/activeRunContext";
+import { usePersistentState } from "../lib/usePersistentState";
 import { api } from "../api/client";
 import { bridge } from "../lib/bridge";
 import {
@@ -121,7 +122,12 @@ export default function ArticlesPage() {
   } = useActiveRun();
   // 只让本次发起创作时跟随的文章页展示运行进度；切换其他文章时不劫持编辑器。
   const [followedRunArticleId, setFollowedRunArticleId] = useState<string | null>(null);
-  const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  // AI 修改栏默认收起，点工具栏「AI 修改」按需展开（展开时自动滚入视野）。
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  // 可拖拽面板宽度（本地持久化）：文章列表 / AI 修改栏 / 配图栏。
+  const [browserWidth, setBrowserWidth] = usePersistentState("opw.article-browser-width", 248);
+  const [aiPaneWidth, setAiPaneWidth] = usePersistentState("opw.ai-pane-width", 318);
+  const [figuresWidth, setFiguresWidth] = usePersistentState("opw.figures-width", 300);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("split");
@@ -596,7 +602,37 @@ export default function ArticlesPage() {
     }
     setDraft(markdown);
   };
-  const layoutStyle = { "--article-browser-width": "248px" } as CSSProperties;
+  // 通用竖向分隔条拖拽：按住后水平拖动调整面板宽度，宽度持久化到 localStorage。
+  const beginWidthDrag = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    startWidth: number,
+    onResize: (start: number, deltaX: number) => void,
+  ) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    document.body.classList.add("is-pane-dragging");
+    const onMove = (moveEvent: PointerEvent) => {
+      onResize(startWidth, moveEvent.clientX - startX);
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      document.body.classList.remove("is-pane-dragging");
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp, { once: true });
+    handle.addEventListener("pointercancel", onUp, { once: true });
+  };
+  const clampWidth = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+  const aiPaneRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  // 展开 AI 修改栏时确保它滚入视野（窄窗口下面板可能被折叠或滚动出视野）。
+  useEffect(() => {
+    if (aiPanelOpen) aiPaneRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [aiPanelOpen]);
+
+  const layoutStyle = { "--article-browser-width": `${browserWidth}px` } as CSSProperties;
 
   return (
     <section className="articles-layout" style={layoutStyle}>
@@ -661,6 +697,9 @@ export default function ArticlesPage() {
       <div
         aria-hidden="true"
         className="article-browser__resizer"
+        onPointerDown={(event) =>
+          beginWidthDrag(event, browserWidth, (start, dx) =>
+            setBrowserWidth(clampWidth(start + dx, 200, 480)))}
         role="separator"
         tabIndex={-1}
       >
@@ -938,14 +977,14 @@ export default function ArticlesPage() {
           )}
 
           {!creating && selected && (
-            <div style={{ display: "grid", gap: 10, maxWidth: assistantOpen ? "none" : 900, minWidth: 0 }}>
+            <div className="article-editor__main" style={{ display: "grid", gap: 10, minWidth: 0 }}>
               <div className="field__head" style={{ padding: "0 2px" }}>
                 <label htmlFor="a-markdown">正文（Markdown）</label>
                 <span className="field-tag">
                   修订 {selected.currentRevisionId?.slice(0, 8)}
                 </span>
               </div>
-              <div className="article-editor__workspace">
+              <div className="article-editor__workspace" ref={workspaceRef}>
                 <div className="article-editor__workbench">
                   <MarkdownWorkbench
                     dirty={dirty}
@@ -963,7 +1002,21 @@ export default function ArticlesPage() {
                   />
                 </div>
                 {aiPanelOpen && (
-                  <AiModifyPane
+                  <>
+                    <div
+                      aria-label="调节 AI 修改栏宽度"
+                      aria-orientation="vertical"
+                      className="pane-resizer"
+                      onPointerDown={(event) =>
+                        beginWidthDrag(event, aiPaneWidth, (start, dx) => {
+                          const ws = workspaceRef.current?.getBoundingClientRect().width ?? 1200;
+                          const max = Math.max(240, Math.min(560, ws - figuresWidth - (viewMode === "split" ? 450 : 330)));
+                          setAiPaneWidth(clampWidth(start - dx, 260, max));
+                        })}
+                      role="separator"
+                    />
+                    <div className="article-editor__pane article-editor__pane--ai" ref={aiPaneRef} style={{ width: aiPaneWidth }}>
+                      <AiModifyPane
                     articleId={selected.articleId}
                     key={selected.articleId}
                     markdown={draft}
@@ -987,9 +1040,24 @@ export default function ArticlesPage() {
                       }
                     }}
                     selection={rewriteSelection}
-                  />
+                      />
+                    </div>
+                  </>
                 )}
-                <ArticleImagePane
+                <div
+                  aria-label="调节配图栏宽度"
+                  aria-orientation="vertical"
+                  className="pane-resizer"
+                  onPointerDown={(event) =>
+                    beginWidthDrag(event, figuresWidth, (start, dx) => {
+                      const ws = workspaceRef.current?.getBoundingClientRect().width ?? 1200;
+                      const max = Math.max(240, Math.min(560, ws - (aiPanelOpen ? aiPaneWidth + (viewMode === "split" ? 450 : 330) : 330)));
+                      setFiguresWidth(clampWidth(start - dx, 240, max));
+                    })}
+                  role="separator"
+                />
+                <div className="article-editor__pane article-editor__pane--figures" style={{ width: figuresWidth }}>
+                  <ArticleImagePane
                   canInsert={viewMode !== "preview"}
                   markdown={draft}
                   onImageFileDrop={uploadImageFile}
@@ -1000,7 +1068,8 @@ export default function ArticlesPage() {
                   onMoveFigure={(figure: ArticleFigure, lineNumber: number) =>
                     handleMarkdownChange(moveMarkdownSpanToLine(draft, figure.span, lineNumber))
                   }
-                />
+                  />
+                </div>
               </div>
               <div style={{ display: "flex", gap: 10 }}>
                 {lastAiSnapshot && (

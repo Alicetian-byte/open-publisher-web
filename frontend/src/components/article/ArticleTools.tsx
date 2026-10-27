@@ -883,6 +883,7 @@ export function AssistantDrawer({
   return (
     <aside
       aria-label="编辑助手"
+      className="article-editor__assistant"
       style={{
         display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 10,
         width: 320, borderLeft: "1px solid var(--border)", padding: 16,
