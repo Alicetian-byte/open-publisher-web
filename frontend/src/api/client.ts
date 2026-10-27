@@ -2,7 +2,8 @@ import axios from "axios";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
-  timeout: 15000,
+  // 生图 / AI 写作等后端调用可能需要 2 分钟以上；普通请求仍在 interceptor 层按需处理。
+  timeout: 180000,
   withCredentials: true,
 });
 
