@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ImageIcon, LoaderCircle, MoreHorizontal, Plus, ScissorsLineDashed } from "lucide-react";
+import { BarChart3, ImageIcon, ImageOff, LoaderCircle, MoreHorizontal, Plus, ScissorsLineDashed } from "lucide-react";
 import { renderMermaidSvg } from "./MarkdownPreview";
 import { InsertPositionDialog } from "./InsertPositionDialog";
 import { markdownLineOfOffset, type MarkdownSpan } from "./articleMarkdown";
@@ -34,6 +34,10 @@ export function extractArticleFigures(markdown: string): ArticleFigure[] {
     });
   }
   return figures;
+}
+
+function isEmbeddableImageSrc(src: string): boolean {
+  return /^(data:image\/|blob:|https?:\/\/|\/api\/)/i.test(src);
 }
 
 function figureCaption(figure: ArticleFigure, index: number): string {
@@ -109,6 +113,7 @@ export function ArticleImagePane({
   const [error, setError] = useState<string | null>(null);
   const [lineDialog, setLineDialog] = useState<LineDialog>(null);
   const [menuFor, setMenuFor] = useState<number | null>(null);
+  const [preview, setPreview] = useState<{ src: string; alt: string } | null>(null);
 
   const importFiles = async (files: File[]) => {
     if (!onImageFileDrop) {
@@ -205,13 +210,38 @@ export function ArticleImagePane({
                 onMouseLeave={() => setMenuFor((current) => (current === index ? null : current))}
               >
                 {figure.kind === "image" ? (
-                  <a href={figure.src} rel="noreferrer" target="_blank">
-                    <img alt={figure.alt || `配图 ${index + 1}`} src={figure.src} />
-                  </a>
+                  isEmbeddableImageSrc(figure.src) ? (
+                    <button
+                      aria-label={`预览 ${figure.alt || `配图 ${index + 1}`}`}
+                      className="article-figures__thumb"
+                      onClick={() => setPreview({ src: figure.src, alt: figure.alt || `配图 ${index + 1}` })}
+                      title="点击预览"
+                      type="button"
+                    >
+                      <img alt={figure.alt || `配图 ${index + 1}`} src={figure.src} />
+                    </button>
+                  ) : (
+                    <div
+                      aria-label="图片源不可用"
+                      className="article-figures__missing"
+                      title="这是 AI 生成的本地图片路径，还没有上传或生成对应素材。"
+                    >
+                      <ImageOff aria-hidden="true" size={18} />
+                      <span>图片路径未上传</span>
+                    </div>
+                  )
                 ) : (
                   <MermaidThumb index={index} source={figure.source} />
                 )}
-                <figcaption title={figure.kind === "image" ? figure.alt || figure.src : "创作生成的图表"}>
+                <figcaption
+                  title={
+                    figure.kind === "image"
+                      ? isEmbeddableImageSrc(figure.src)
+                        ? figure.alt || figure.src
+                        : `${figure.alt || figure.src}（源路径未上传）`
+                      : "创作生成的图表"
+                  }
+                >
                   {figureCaption(figure, index)}
                 </figcaption>
                 {canInsert && (
@@ -302,6 +332,20 @@ export function ArticleImagePane({
         <p className="article-figures__hint">
           <BarChart3 size={12} /> 含创作生成的图表，会随正文实时更新
         </p>
+      )}
+      {preview && (
+        <div
+          aria-label="图片预览"
+          aria-modal="true"
+          className="article-figures__preview"
+          onClick={() => setPreview(null)}
+          role="dialog"
+        >
+          <figure onClick={(event) => event.stopPropagation()}>
+            <img alt={preview.alt} src={preview.src} />
+            <figcaption title={preview.alt}>{preview.alt}</figcaption>
+          </figure>
+        </div>
       )}
       {lineDialog?.mode === "insert" && (
         <InsertPositionDialog
