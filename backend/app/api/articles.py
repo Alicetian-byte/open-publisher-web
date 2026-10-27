@@ -17,13 +17,24 @@ from app.core.auth import require_user
 from app.db.session import get_db
 from app.models.user import AppUser
 from app.schemas.blueprint import ArticleWriteRequest
-from app.services.article_store import ArticleConflictError, ArticleStore
+from app.services.article_store import (
+    ArticleConflictError,
+    ArticlePermissionError,
+    ArticleStore,
+)
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
 
 def _store(db: Session) -> ArticleStore:
     return ArticleStore(db)
+
+
+def _forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "ARTICLE_FORBIDDEN", "message": "Article belongs to another user", "retryable": False},
+    )
 
 
 def _conflict() -> HTTPException:
@@ -58,6 +69,8 @@ def write_article(
         )
     except ArticleConflictError:
         raise _conflict() from None
+    except ArticlePermissionError:
+        raise _forbidden() from None
 
 
 @router.get("/{article_id}")
@@ -115,6 +128,8 @@ def restore_article_revision(
         restored = _store(db).restore_revision(article_id, revision_id, user.id)
     except ArticleConflictError:
         raise _conflict() from None
+    except ArticlePermissionError:
+        raise _forbidden() from None
     if restored is None:
         raise HTTPException(status_code=404, detail={
             "code": "ARTICLE_REVISION_NOT_FOUND",
@@ -201,6 +216,8 @@ def apply_article_visual(
         )
     except ArticleConflictError:
         raise _conflict() from None
+    except ArticlePermissionError:
+        raise _forbidden() from None
     except KeyError:
         raise HTTPException(status_code=404, detail={
             "code": "ARTICLE_NOT_FOUND", "message": "Article was not found", "retryable": False,

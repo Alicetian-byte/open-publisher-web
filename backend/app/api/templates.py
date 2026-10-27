@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_user
+from app.core.auth import require_user, require_admin
 from app.db.session import get_db
 from app.models.user import AppUser
 from app.services.template_service import TemplateService
@@ -19,6 +19,11 @@ class TemplateCreateRequest(BaseModel):
     markdown: str = Field(min_length=1)
     usageInstructions: str = ""
     referenceMarkdown: str | None = None
+    styleProfile: dict | None = None
+    structureProfile: dict | None = None
+    layoutProfile: dict | None = None
+    fixedBlocks: list[dict] | None = None
+    variables: list[str] | None = None
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -35,6 +40,7 @@ class TemplateUpdateRequest(BaseModel):
 
 
 class TemplateExtractRequest(BaseModel):
+    rightsConfirmed: bool = False
     markdown: str = Field(min_length=1, max_length=200_000)
 
 
@@ -54,6 +60,8 @@ def create_template(
             name=body.name, description=body.description, category=body.category,
             markdown=body.markdown, usage_instructions=body.usageInstructions,
             reference_markdown=body.referenceMarkdown, owner_user_id=user.id,
+            style_profile=body.styleProfile, structure_profile=body.structureProfile,
+            layout_profile=body.layoutProfile, fixed_blocks=body.fixedBlocks, variables=body.variables,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -103,6 +111,8 @@ def extract_template(
     db: Session = Depends(get_db),
     user: AppUser = Depends(require_user),
 ):
+    if not body.rightsConfirmed:
+        raise HTTPException(status_code=400, detail="请确认你有权使用参考文章提取模板")
     try:
         return TemplateService(db).extract_from_article(
             body.markdown, owner_user_id=user.id,
@@ -111,3 +121,10 @@ def extract_template(
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception as exc:  # noqa: BLE001 - LLM 调用/解析失败统一 502
         raise HTTPException(status_code=502, detail=f"模板提取失败：{exc}") from None
+
+
+@router.post("/refresh-official", dependencies=[Depends(require_admin)])
+def refresh_official_templates(db: Session = Depends(get_db)):
+    from app.services.template_service import seed_builtin_templates
+    seed_builtin_templates(db, refresh=True)
+    return {"refreshed": True}

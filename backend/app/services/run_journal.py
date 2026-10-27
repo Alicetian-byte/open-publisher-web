@@ -77,12 +77,12 @@ class RunJournal:
         return self._map(run) if run else None
 
     def get_run(self, run_id: str) -> dict | None:
-        run = self.db.get(AgentRun, run_id)
+        run = self.db.get(AgentRun, run_id, populate_existing=True)
         return self._map(run) if run else None
 
     def transition(self, run_id: str, status: str,
                    error: dict | None = None) -> dict:
-        run = self.db.get(AgentRun, run_id)
+        run = self.db.get(AgentRun, run_id, populate_existing=True)
         if run is None:
             raise RunJournalError(f"Unknown run: {run_id}")
         if run.status == status:
@@ -103,7 +103,7 @@ class RunJournal:
 
     def append(self, run_id: str, event_type: str, payload,
                agent_id: str | None = None) -> dict:
-        run = self.db.get(AgentRun, run_id)
+        run = self.db.get(AgentRun, run_id, populate_existing=True)
         if run is None:
             raise RunJournalError(f"Unknown run: {run_id}")
         last = self.db.scalar(
@@ -136,7 +136,7 @@ class RunJournal:
         }
 
     def events_after(self, run_id: str, after_sequence: int) -> list[dict]:
-        run = self.db.get(AgentRun, run_id)
+        run = self.db.get(AgentRun, run_id, populate_existing=True)
         if run is None:
             raise RunJournalError(f"Unknown run: {run_id}")
         rows = self.db.scalars(

@@ -146,3 +146,17 @@ def test_resolve_llm_config_prefers_active_profile(profile_engine, monkeypatch):
     config = resolve_llm_config()
     assert config["api_key"] == "" or isinstance(config["api_key"], str)
     session.close()
+
+
+def test_profiles_shared_across_users(client):
+    """管理端创建的模型档案是平台共享资源：普通用户列表可见。"""
+    res = client.post(
+        "/api/settings/profiles",
+        json={"name": "共享模型", "baseUrl": "https://x/v1", "modelId": "glm-4"},
+    )
+    assert res.status_code == 201
+    created = res.json()
+    # conftest：require_user 覆盖为 u-test（普通用户）、require_admin 覆盖为 u-admin
+    assert created["ownerId"] is None
+    visible = client.get("/api/settings/profiles").json()["profiles"]
+    assert [p["id"] for p in visible] == [created["id"]]

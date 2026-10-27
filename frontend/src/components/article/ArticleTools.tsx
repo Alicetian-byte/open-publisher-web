@@ -1,3 +1,4 @@
+import { Bot, LoaderCircle, PencilLine, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { marked } from "marked";
@@ -5,6 +6,250 @@ import DOMPurify from "dompurify";
 
 export function renderMarkdown(markdown: string): string {
   return DOMPurify.sanitize(marked.parse(markdown, { async: false }) as string);
+}
+
+
+
+/* ---------------- 文章工作区独立 AI 修改栏（图片编辑不占位，候选确认后才写回） ---------------- */
+
+interface AiSelection {
+  start: number;
+  end: number;
+  text: string;
+}
+
+interface AiModelProfile {
+  id: string;
+  is_default?: boolean;
+  name: string;
+  modelId: string;
+  keyConfigured: boolean;
+}
+
+interface AiModifyRecord {
+  id: string;
+  instruction: string;
+  scope: string;
+  summary: string;
+  candidate: string;
+  status: "ready" | "applied";
+  createdAt: string;
+}
+
+interface AiModifyPaneProps {
+  articleId: string;
+  markdown: string;
+  selection?: AiSelection | null;
+  onApply: (nextMarkdown: string) => void;
+  onClose: () => void;
+}
+
+export function AiModifyPane({
+  articleId,
+  markdown,
+  selection = null,
+  onApply,
+  onClose,
+}: AiModifyPaneProps) {
+  const [instruction, setInstruction] = useState("");
+  const [profileId, setProfileId] = useState("");
+  const [profiles, setProfiles] = useState<AiModelProfile[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [records, setRecords] = useState<AiModifyRecord[]>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    api.get<{ profiles: AiModelProfile[] }>("/settings/profiles")
+      .then((res) => {
+        if (!mounted) return;
+        const list = res.data.profiles ?? [];
+        setProfiles(list);
+        setProfileId(list.find((item) => item.is_default)?.id ?? list[0]?.id ?? "");
+      })
+      .catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [records, busy]);
+
+  const submit = async () => {
+    const requirement = instruction.trim();
+    if (!requirement) {
+      setError("请先说明要怎么改。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const scope = selection?.text.trim() ? "选中内容" : "整篇文章";
+    try {
+      const run = await api.post<{ id: string }>("/agent-runs/rewrite-candidate", {
+        articleId,
+        markdown,
+        instruction: requirement,
+        selectedTexts: selection?.text.trim() ? [selection.text] : [],
+        profileId: profileId || null,
+      });
+      for (let i = 0; i < 360; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const status = await api.get<{ status: string }>(`/agent-runs/${run.data.id}`);
+        if (status.data.status === "completed") {
+          const journal = await api.get<{ events: Array<{ type: string; payload: Record<string, unknown> }> }>(
+            `/agent-runs/${run.data.id}/events?after=0`,
+          );
+          const ready = journal.data.events.find((event) => event.type === "rewrite.candidate_ready");
+          const replacement = String((ready?.payload?.replacements as string[] | undefined)?.[0] ?? "");
+          if (!ready || !replacement) {
+            setError("运行完成但没有候选结果。");
+            return;
+          }
+          setRecords((current) => [
+            ...current,
+            {
+              id: run.data.id,
+              instruction: requirement,
+              scope,
+              summary: String(ready.payload.summary ?? ""),
+              candidate: replacement,
+              status: "ready",
+              createdAt: new Date().toLocaleTimeString(),
+            },
+          ]);
+          setInstruction("");
+          return;
+        }
+        if (status.data.status === "failed" || status.data.status === "stopped") {
+          setError("AI 修改失败或已停止。");
+          return;
+        }
+      }
+      setError("AI 修改超时，请稍后重试。");
+    } catch {
+      setError("发起 AI 修改失败（需要后端配置 LLM Key）。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyRecord = (record: AiModifyRecord) => {
+    onApply(record.candidate);
+    setRecords((current) => current.map((item) => (
+      item.id === record.id ? { ...item, status: "applied" } : item
+    )));
+  };
+
+  return (
+    <aside aria-label="AI 修改" className="article-ai-modify">
+      <header className="article-ai-modify__head">
+        <div className="article-ai-modify__title">
+          <Bot aria-hidden="true" size={15} />
+          <strong>AI 修改</strong>
+        </div>
+        <button aria-label="关闭 AI 修改栏" className="icon-button" onClick={onClose} type="button">
+          <X size={14} />
+        </button>
+      </header>
+
+      <div className="article-ai-modify__scroll" ref={scrollRef}>
+        <div className={`article-ai-modify__scope${selection?.text.trim() ? " is-selection" : ""}`}>
+          <PencilLine aria-hidden="true" size={13} />
+          <span>{selection?.text.trim() ? `已选中 ${selection.text.length} 字` : "当前范围：整篇文章"}</span>
+        </div>
+
+        {records.length === 0 && !busy && (
+          <div className="article-ai-modify__empty">
+            <Bot aria-hidden="true" size={22} />
+            <p>还没有修改记录</p>
+            <small>候选只写入编辑器，确认保存后才会形成新版本。</small>
+          </div>
+        )}
+
+        {records.map((record) => (
+          <article className="article-ai-modify__record" key={record.id}>
+            <header>
+              <span>{record.scope}</span>
+              <time>{record.createdAt}</time>
+            </header>
+            <strong>{record.instruction}</strong>
+            {record.summary && <p>{record.summary}</p>}
+            <details>
+              <summary>查看候选</summary>
+              <pre>{record.candidate}</pre>
+            </details>
+            <footer>
+              <span className={record.status === "applied" ? "is-applied" : undefined}>
+                {record.status === "applied" ? "已写入编辑器" : "待确认"}
+              </span>
+              {record.status === "ready" && (
+                <button className="text-button" onClick={() => applyRecord(record)} type="button">
+                  应用到编辑器
+                </button>
+              )}
+            </footer>
+          </article>
+        ))}
+
+        {busy && (
+          <div className="article-ai-modify__activity">
+            <LoaderCircle aria-hidden="true" className="spin" size={14} />
+            <span>正在生成修改候选……</span>
+          </div>
+        )}
+        {error && <p className="article-ai-modify__error" role="alert">{error}</p>}
+      </div>
+
+      <footer className="article-ai-modify__composer">
+        <div className="article-ai-modify__selects">
+          <select
+            aria-label="修改范围"
+            disabled={Boolean(selection?.text.trim())}
+            onChange={() => undefined}
+            value={selection?.text.trim() ? "selection" : "whole"}
+          >
+            <option value="whole">整篇文章</option>
+            <option value="selection">选中内容</option>
+          </select>
+          <select aria-label="写作模型" onChange={(event) => setProfileId(event.target.value)} value={profileId}>
+            {profiles.length > 0 ? profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name} · {profile.modelId}{profile.keyConfigured ? "" : "（缺少密钥）"}
+              </option>
+            )) : <option value="">未配置模型</option>}
+          </select>
+        </div>
+        <textarea
+          aria-label="AI 修改要求"
+          onChange={(event) => setInstruction(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              void submit();
+            }
+          }}
+          placeholder="说说你想怎么改"
+          rows={3}
+          value={instruction}
+        />
+        <div className="article-ai-modify__actions">
+          <span>Ctrl + Enter 发送</span>
+          <button
+            aria-label="发送 AI 修改要求"
+            className="icon-button article-ai-modify__send"
+            disabled={busy}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+          </button>
+        </div>
+      </footer>
+    </aside>
+  );
 }
 
 /* ---------------- AI 改写对话框（蓝本 RewriteService：只出候选，用户确认后应用） ---------------- */
@@ -485,7 +730,17 @@ interface AssistantSessionView {
   messages: AssistantSessionMessage[];
 }
 
-export function AssistantDrawer({ articleId, markdown }: { articleId: string; markdown: string }) {
+export function AssistantDrawer({
+  articleId,
+  markdown,
+  selection = null,
+  onApplySelection,
+}: {
+  articleId: string;
+  markdown: string;
+  selection?: { start: number; end: number; text: string } | null;
+  onApplySelection?: (replacement: string) => void;
+}) {
   const [session, setSession] = useState<AssistantSessionView | null>(null);
   const [messages, setMessages] = useState<AssistantSessionMessage[]>([]);
   const [profiles, setProfiles] = useState<AssistantModelProfile[]>([]);
@@ -494,6 +749,9 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const attachmentsRef = useRef<HTMLInputElement>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -535,21 +793,23 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
     };
   }, [articleId]);
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (options?: { mode?: "chat" | "rewrite"; message?: string }) => {
+    const text = (options?.message ?? input).trim();
+    const mode = options?.mode ?? "chat";
     if (!text || busy) return;
     const optimistic: AssistantSessionMessage = {
       id: `local-${Date.now()}`, role: "user", text,
     };
     setMessages((current) => [...current, optimistic]);
     setInput("");
+    setAttachments([]);
     setBusy(true);
     setError(null);
     try {
       if (session) {
         const res = await api.post<AssistantSessionView & { reply: string }>(
           `/assistant/sessions/${session.id}/chat`,
-          { message: text, articleContext: markdown, profileId: activeProfileId || null },
+          { message: text, articleContext: markdown, profileId: activeProfileId || null, mode, attachments },
         );
         setSession({
           ...res.data,
@@ -557,16 +817,20 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
         });
         setMessages(res.data.messages ?? []);
         setActiveProfileId(res.data.activeProfileId ?? activeProfileId);
+        if (mode === "rewrite") setPendingSuggestion(res.data.reply);
       } else {
         const res = await api.post<{ reply: string }>("/assistant/chat", {
           messages: [{ role: "user", text }],
           articleContext: markdown,
           profileId: activeProfileId || null,
+          mode,
+          attachments,
         });
         setMessages((current) => [
           ...current,
           { id: `assistant-${Date.now()}`, role: "assistant", text: res.data.reply },
         ]);
+        if (mode === "rewrite") setPendingSuggestion(res.data.reply);
       }
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -574,6 +838,25 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
     } finally {
       setBusy(false);
     }
+  };
+
+  const addAttachments = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const added: string[] = [];
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > 4 * 1024 * 1024) { setError("「" + file.name + "」超过 4MB，已跳过。"); continue; }
+      if (attachments.length + added.length >= 4) break;
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      added.push(dataUrl);
+    }
+    setAttachments((current) => [...current, ...added].slice(0, 4));
+    if (attachmentsRef.current) attachmentsRef.current.value = "";
   };
 
   const clearSession = async () => {
@@ -660,6 +943,37 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
         {busy && <p className="muted" style={{ fontSize: 12 }}>思考中……</p>}
         {error && <p className="workflow-task__failure" style={{ fontSize: 12 }}>{error}</p>}
       </div>
+      {pendingSuggestion && (
+        <div style={{ background: "var(--accent-soft)", borderRadius: 8, display: "grid", fontSize: 12, gap: 8, padding: 10 }}>
+          <strong>改写建议</strong>
+          <div style={{ maxHeight: 160, overflowY: "auto", whiteSpace: "pre-wrap" }}>{pendingSuggestion}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              className="button button--primary"
+              onClick={() => { onApplySelection?.(pendingSuggestion); setPendingSuggestion(null); }}
+              type="button"
+            >
+              应用到文章
+            </button>
+            <button className="button button--quiet" onClick={() => setPendingSuggestion(null)} type="button">忽略</button>
+          </div>
+        </div>
+      )}
+      {selection?.text.trim() ? (
+        <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
+          <small className="muted" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            已选中 {selection.text.length} 字
+          </small>
+          <button
+            className="button button--quiet"
+            disabled={busy}
+            onClick={() => void send({ mode: "rewrite", message: input.trim() || "润色这段文字，保持原有语气" })}
+            type="button"
+          >
+            改写选中片段
+          </button>
+        </div>
+      ) : null}
       <div style={{ display: "grid", gap: 6 }}>
         <textarea
           onChange={(event) => setInput(event.target.value)}
@@ -673,6 +987,37 @@ export function AssistantDrawer({ articleId, markdown }: { articleId: string; ma
           rows={3}
           value={input}
         />
+        {attachments.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {attachments.map((dataUrl, index) => (
+              <div key={index} style={{ position: "relative" }}>
+                <img alt={`附件 ${index + 1}`} src={dataUrl} style={{ borderRadius: 6, height: 44, objectFit: "cover", width: 60 }} />
+                <button
+                  aria-label={`移除附件 ${index + 1}`}
+                  className="icon-button"
+                  onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+                  style={{ position: "absolute", right: -6, top: -6 }}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ alignItems: "center", display: "flex", gap: 6 }}>
+          <button className="text-button" disabled={attachments.length >= 4} onClick={() => attachmentsRef.current?.click()} type="button">
+            附加图片（≤4 张，需模型支持图片理解）
+          </button>
+          <input
+            accept="image/*"
+            hidden
+            multiple
+            onChange={(event) => void addAttachments(event.target.files)}
+            ref={attachmentsRef}
+            type="file"
+          />
+        </div>
         <small className="muted" style={{ fontSize: 10 }}>
           上下文：当前编辑器正文；模型由服务端档案决定。
         </small>

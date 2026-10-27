@@ -108,6 +108,17 @@ def test_writer_article_create_full_flow(db):
     assert "revision.committed" in types
     assert types[-1] == "run.completed"
 
+    # 方案2：节点化工作流事件（前端 WorkflowWorkspace 时间线数据源）
+    node_ids = [
+        e["payload"]["nodeId"]
+        for e in journal.events_after(run["id"], 0)
+        if e["type"] == "node.completed"
+    ]
+    # 蓝本 8 节点：research → outline → draft → natural-style → review →
+    # reference-safety → risk（visual 由前端配图阶段驱动，后端只发 node.started）
+    assert node_ids == ["research", "outline", "draft", "natural-style", "review", "reference-safety", "risk", "visual"]
+    assert "node.completed" in types
+
 
 def test_writer_streams_model_deltas(db):
     llm = FakeStreamingLLM()
@@ -329,3 +340,65 @@ def test_writer_fallback_fails_on_only_markup(db):
     final = _wait_terminal(journal, run["id"])
     assert final["status"] == "failed"
     assert service.store.read("w-fb2") is None
+
+
+NODES = ["research", "outline", "draft", "natural-style", "review", "reference-safety", "risk", "visual"]
+
+@pytest.mark.parametrize("node", NODES)
+def test_disabled_node_is_not_started(db, node):
+    service = WriterService(db, llm=FakeLLM())
+    run = service.start_article_create(article_id="disable-" + node, prompt="x", creation={"disabledNodeIds": [node]})
+    assert _wait_terminal(service.journal, run["id"])["status"] == "completed"
+    events = service.journal.events_after(run["id"], 0)
+    assert not any(e["type"] == "node.started" and e["payload"]["nodeId"] == node for e in events)
+    skipped = [e for e in events if e["type"] == "node.completed" and e["payload"]["nodeId"] == node]
+    assert skipped[0]["payload"]["reason"] == "disabled"
+    if node == "draft":
+        assert service.store.read("disable-" + node) is None
+
+
+def test_off_blocks_research_and_unsolicited_tool_calls(db, monkeypatch):
+    from app.services import writer_service as ws
+    calls = []
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    monkeypatch.setattr(ws, "_web_search_summary", lambda q: calls.append(q))
+    monkeypatch.setattr(ws, "_github_repository_summary", lambda q: calls.append(q))
+    llm = FakeAgentLLM([
+        {"toolCalls": [{"id": "web", "name": "web_search", "arguments": '{"query":"x"}'}]},
+        {"toolCalls": [{"id": "git", "name": "github_repository", "arguments": '{"repository":"a/b"}'}]},
+        {"toolCalls": [{"id": "write", "name": "write_article", "arguments": json.dumps({"title":"t", "markdown":"# t", "reason":"r"})}]},
+    ])
+    service = WriterService(db, llm=llm)
+    run = service.start_article_create(article_id="offline", prompt="x", creation={"webSearchMode":"off", "references":"用户事实"})
+    assert _wait_terminal(service.journal, run["id"])["status"] == "completed"
+    assert calls == []
+    assert [t["function"]["name"] for t in llm.calls[0]["tools"]] == ["write_article"]
+    assert "用户事实" in str(llm.calls[0]["messages"])
+
+
+@pytest.mark.parametrize("node", NODES)
+def test_stop_at_each_stage_prevents_later_stages(db, monkeypatch, node):
+    original = WriterService._node_started
+    def stop_at(self, run_id, node_id):
+        if node_id == node:
+            self.request_stop(run_id)
+        return original(self, run_id, node_id)
+    monkeypatch.setattr(WriterService, "_node_started", stop_at)
+    service = WriterService(db, llm=FakeLLM())
+    run = service.start_article_create(article_id="stop-" + node, prompt="x")
+    assert _wait_terminal(service.journal, run["id"])["status"] == "stopped"
+    events = service.journal.events_after(run["id"], 0)
+    assert events[-1]["type"] == "run.stopped"
+    assert not any(e["type"] == "node.completed" and e["payload"]["nodeId"] == node for e in events)
+
+
+def test_stop_during_llm_return_does_not_commit(db):
+    class StopLLM(FakeLLM):
+        def complete(self, *args, **kwargs):
+            service.request_stop(run["id"])
+            return "# 不应保存"
+    service = WriterService(db, llm=StopLLM())
+    run = service.journal.create_run(article_id="stop-return", agent_id="writer", operation="article-create")
+    service._execute(run["id"], article_id="stop-return", prompt="x", tone=None, length_preset="short", custom_length=None, humanize=False, base_revision_id=None, base_content_hash=None, owner_user_id=None, creation={})
+    assert service.journal.get_run(run["id"])["status"] == "stopped"
+    assert service.store.read("stop-return") is None

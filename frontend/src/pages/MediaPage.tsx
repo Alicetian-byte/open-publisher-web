@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, ImagePlus, LoaderCircle, Pencil, Save, Trash2, Upload, X } from "lucide-react";
+import { Check, Copy, ImagePlus, LoaderCircle, Pencil, Rocket, Save, Trash2, Upload, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 
 // 素材库：蓝本 MediaAsset 的 Web 版。管理描述、用途、标签、生图提示词，
@@ -46,6 +47,7 @@ function toForm(asset: MediaAsset): MediaForm {
 }
 
 export default function MediaPage() {
+  const navigate = useNavigate();
   const [assets, setAssets] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -198,6 +200,21 @@ export default function MediaPage() {
     setTimeout(() => setCopiedId(null), 1200);
   };
 
+  const mediaMarkdown = (asset: MediaAsset) => `![${asset.alt || asset.name}](/api/media/${asset.id}/raw)`;
+
+  const copySelectedMarkdown = async () => {
+    const picked = assets.filter((asset) => selectedIds.includes(asset.id));
+    if (picked.length === 0) return;
+    await navigator.clipboard.writeText(picked.map(mediaMarkdown).join("\n\n"));
+    setCopiedId("batch");
+    setTimeout(() => setCopiedId(null), 1200);
+  };
+
+  const bringIntoCreation = () => {
+    if (!selectedIds.length) return;
+    navigate("/", { state: { selectedMediaIds: [...selectedIds] } });
+  };
+
   const toggleSelected = (id: string) => {
     setSelectedIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
@@ -277,6 +294,27 @@ export default function MediaPage() {
             <Trash2 size={14} />
             {deleting ? "删除中" : `删除选中 ${selectedIds.length}`}
           </button>
+          <button
+            className="button button--quiet"
+            disabled={!selectedIds.length}
+            onClick={() => void copySelectedMarkdown()}
+            type="button"
+          >
+            {copiedId === "batch" ? <Check size={14} /> : <Copy size={14} />}
+            {copiedId === "batch" ? "已复制" : `复制选中 Markdown`}
+          </button>
+          <button
+            className="button button--quiet"
+            disabled={!selectedIds.length}
+            onClick={bringIntoCreation}
+            type="button"
+          >
+            <Rocket size={14} />
+            带入创作页
+          </button>
+          <span className="muted" style={{ fontSize: 12, marginLeft: "auto" }}>
+            共 {assets.length} 个素材{selectedIds.length ? ` · 已选 ${selectedIds.length}` : ""}
+          </span>
         </div>
       </div>
 
@@ -288,7 +326,17 @@ export default function MediaPage() {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12, alignContent: "start" }}>
             {assets.map((asset) => (
-              <figure className="panel" key={asset.id} style={{ display: "grid", gap: 8, margin: 0, padding: 10 }}>
+              <figure
+                className="panel"
+                draggable
+                key={asset.id}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData("text/x-media-markdown", mediaMarkdown(asset));
+                  event.dataTransfer.effectAllowed = "copy";
+                }}
+                style={{ display: "grid", gap: 8, margin: 0, padding: 10 }}
+                title="拖入文章编辑器光标处插入"
+              >
                 <div style={{ position: "relative" }}>
                   <img
                     alt={asset.alt || asset.name}

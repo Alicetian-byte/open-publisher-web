@@ -97,13 +97,13 @@ npm run dev
 
 开发模式下 Vite 会把 `/api` 代理到 http://localhost:8000（可用 `VITE_PROXY_TARGET` 覆盖）。
 
-## 环境变量（脱敏约定）
+## 秘密管理（企业级约定）
 
-所有秘密（数据库密码、JWT 密钥、LLM / 生图 API Key、管理员密码）一律通过 `.env` / 环境变量注入，参考 `.env.example` 中的占位符：
-
-- 密钥永远不进入仓库、不出现在前端代码或日志中
-- `.env` 已被 `.gitignore` 排除，仓库中只有 `.env.example` 占位模板
-- 管理员账号密码通过 `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` 配置
+- **LLM / 生图 API Key：密文入库**（2026-10-26 起）。管理端可直接录入密钥，后端用 Fernet 信封加密后存入 `app_secrets` 表，主密钥通过 `SECRET_ENCRYPTION_KEY` 环境变量注入；环境变量（`LLM_API_KEY` / `IMAGE_API_KEY`）保留为回退/开发路径。解析优先级：DB 密文 > 环境变量 > 全局回退。变更写入 `app_secret_audit` 审计表。
+- **主密钥**：`SECRET_ENCRYPTION_KEY`（Fernet key）只放 `.env` / 宿主环境变量，生产环境必须显式配置；未配置时开发环境回退从 `AUTH_JWT_SECRET` 派生（仅限本地）。
+- 存量迁移：`backend/scripts/migrate_env_keys_to_db.py`（先干跑，确认后加 `--execute`）。
+- 其余秘密（数据库密码、JWT 密钥、管理员密码）仍通过 `.env` / 环境变量注入，参考 `.env.example` 占位模板；`.env` 已被 `.gitignore` 排除。
+- 密钥明文永不进入仓库、不回显浏览器、不写日志；管理端只见掩码尾号（keyHint）。
 
 ## 路线图
 
@@ -112,3 +112,4 @@ npm run dev
 - [x] 阶段 3：前端工作台（创作 / 工作流可视化 / 编辑器 / 版本历史 / AI 优化）
 - [x] 阶段 4：文章库、配图中心、模板库、发布队列、管理后台、多用户隔离
 - [ ] 阶段 5：比赛材料（技术文档 / 演示视频 / 在线演示）
+

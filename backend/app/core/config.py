@@ -16,14 +16,18 @@ class Settings(BaseSettings):
 
     # 登录认证（管理站与用户站共用账号后端；令牌签名密钥用环境变量配置）
     auth_jwt_secret: str = "dev-open-publisher-web-secret-change-me"
-    access_token_expire_minutes: int = 720
+    # 企业级安全默认：2 小时（原 720 分钟偏长）；可用 ACCESS_TOKEN_EXPIRE_MINUTES 覆盖
+    access_token_expire_minutes: int = 120
+    # 登录/注册限流（防爆破）：窗口内按客户端 IP 计数
+    login_rate_limit_max: int = 20
+    login_rate_limit_window_seconds: int = 300
     auth_admin_username: str = "admin"
     # 默认只是占位符：必须通过 AUTH_ADMIN_PASSWORD 配置真实管理员密码（不进仓库）
     auth_admin_password: str = "change_me_admin_password"
     auth_admin_display_name: str = "系统管理员"
 
 
-    # LLM（OpenAI 兼容接口；密钥一律走环境变量，不进仓库）
+    # LLM（OpenAI 兼容接口；密钥支持 DB 加密存储 app_secrets，环境变量仅作回退/开发）
     # 兼容 LLM_API_KEY 与 OPENAI_API_KEY 两种命名（后者为 .env.example 中的习惯写法）
     llm_api_key: str = Field(
         default="",
@@ -57,6 +61,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("IMAGE_TIMEOUT_SECONDS", "OPENAI_IMAGE_TIMEOUT_SECONDS"),
     )
 
+    # 密钥信封主密钥（KEK）：Fernet 密钥，加密 app_secrets 中的密钥密文。
+    # 生产必须显式配置；未配置时开发回退从 auth_jwt_secret 派生。
+    secret_encryption_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("SECRET_ENCRYPTION_KEY", "SECRET_MASTER_KEY"),
+    )
+
     # 工作流
     workflow_score_threshold: int = 80
     workflow_max_iterations: int = 3
@@ -75,3 +86,5 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+

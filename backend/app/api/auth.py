@@ -13,6 +13,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import exceptions, schemas
 from pydantic import BaseModel, Field
 from app.core.auth import COOKIE_NAME, get_current_user
+from app.core.rate_limit import rate_limit_auth
 from app.core.config import get_settings
 from app.core.users import (SyncUserDatabase, UserManager, create_access_token, get_user_db, get_user_manager)
 from app.models.user import AppUser
@@ -70,7 +71,7 @@ async def _issue_login(
     return {"token": token, "user": _user_out(user)}
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", status_code=201, dependencies=[Depends(rate_limit_auth)])
 async def register(
     body: RegisterIn,
     response: Response,
@@ -101,7 +102,7 @@ async def _authenticate(
         return None
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(rate_limit_auth)])
 async def login(
     body: LoginIn,
     response: Response,
@@ -116,7 +117,7 @@ async def login(
     return await _issue_login(response, user, user_db)
 
 
-@router.post("/admin/login")
+@router.post("/admin/login", dependencies=[Depends(rate_limit_auth)])
 async def admin_login(
     body: LoginIn,
     response: Response,
@@ -142,4 +143,5 @@ def me(user: AppUser = Depends(get_current_user)):
 def logout(response: Response):
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"ok": True}
+
 

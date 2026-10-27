@@ -89,10 +89,20 @@ def delete_media(
     db: Session = Depends(get_db),
     user: AppUser = Depends(require_user),
 ):
+    row = MediaService(db).get(asset_id, owner_user_id=user.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="asset not found")
+    _writable_or_403(row, user)
     try:
         MediaService(db).delete(asset_id, owner_user_id=user.id)
     except KeyError:
         raise HTTPException(status_code=404, detail="asset not found") from None
+
+
+def _writable_or_403(row, user: AppUser) -> None:
+    """共享（无属主）素材只读；写操作仅属主或管理员。"""
+    if row.owner_user_id != user.id and getattr(user, "role", "user") != "admin":
+        raise HTTPException(status_code=403, detail={"code": "MEDIA_FORBIDDEN", "message": "asset belongs to another user"})
 
 
 @router.patch("/{asset_id}")
@@ -102,6 +112,10 @@ def update_media(
     db: Session = Depends(get_db),
     user: AppUser = Depends(require_user),
 ):
+    row = MediaService(db).get(asset_id, owner_user_id=user.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="asset not found")
+    _writable_or_403(row, user)
     try:
         return MediaService(db).update(
             asset_id,
