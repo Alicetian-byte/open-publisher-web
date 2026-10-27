@@ -1,5 +1,6 @@
-import { Bot, LoaderCircle, PencilLine, Send, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Bot, GripVertical, LoaderCircle, PencilLine, Send, X } from "lucide-react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { usePersistentState } from "../../lib/usePersistentState";
 import { api } from "../../api/client";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -739,11 +740,13 @@ export function AssistantDrawer({
   markdown,
   selection = null,
   onApplySelection,
+  onClose,
 }: {
   articleId: string;
   markdown: string;
   selection?: { start: number; end: number; text: string } | null;
   onApplySelection?: (replacement: string) => void;
+  onClose?: () => void;
 }) {
   const [session, setSession] = useState<AssistantSessionView | null>(null);
   const [messages, setMessages] = useState<AssistantSessionMessage[]>([]);
@@ -756,10 +759,46 @@ export function AssistantDrawer({
   const attachmentsRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(null);
+  // 悬浮小窗位置：跨会话记忆，拖拽时实时写入 state。
+  const [position, setPosition] = usePersistentState("opw.article-assistant-position", {
+    left: Math.max(12, window.innerWidth - 372),
+    top: 88,
+  });
+  const dragStartRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    const clamp = () => setPosition((current) => ({
+      left: Math.min(Math.max(12, current.left), Math.max(12, window.innerWidth - 120)),
+      top: Math.min(Math.max(12, current.top), Math.max(12, window.innerHeight - 80)),
+    }));
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [setPosition]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, busy]);
+
+  const beginWindowDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    dragStartRef.current = { x: event.clientX, y: event.clientY, left: position.left, top: position.top };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveWindow = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const start = dragStartRef.current;
+    if (!start) return;
+    const nextLeft = start.left + event.clientX - start.x;
+    const nextTop = start.top + event.clientY - start.y;
+    setPosition({
+      left: Math.min(Math.max(12, nextLeft), Math.max(12, window.innerWidth - 120)),
+      top: Math.min(Math.max(12, nextTop), Math.max(12, window.innerHeight - 80)),
+    });
+  };
+  const endWindowDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (dragStartRef.current) event.currentTarget.releasePointerCapture(event.pointerId);
+    dragStartRef.current = null;
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -887,17 +926,28 @@ export function AssistantDrawer({
   return (
     <aside
       aria-label="编辑助手"
-      className="article-editor__assistant"
-      style={{
-        display: "grid", gridTemplateRows: "auto auto 1fr auto", gap: 10,
-        width: 320, borderLeft: "1px solid var(--border)", padding: 16,
-        background: "var(--surface)", overflowY: "auto",
-      }}
+      className="article-assistant-window"
+      style={{ left: position.left, top: position.top }}
     >
-      <div>
-        <span className="page-kicker">编辑助手</span>
-        <p className="muted" style={{ fontSize: 11 }}>只给建议，不直接改文章</p>
-      </div>
+      <header className="article-assistant-window__head">
+        <button
+          aria-label="拖动编辑助手"
+          className="article-assistant-window__drag"
+          onPointerDown={beginWindowDrag}
+          onPointerMove={moveWindow}
+          onPointerUp={endWindowDrag}
+          type="button"
+        >
+          <GripVertical aria-hidden="true" size={14} />
+          <span className="article-assistant-window__title">
+            <strong>编辑助手</strong>
+            <small>只给建议，不直接改文章</small>
+          </span>
+        </button>
+        <button aria-label="关闭编辑助手" className="icon-button" onClick={onClose} type="button">
+          <X size={14} />
+        </button>
+      </header>
       <div style={{ display: "grid", gap: 6 }}>
         <select
           aria-label="助手模型"

@@ -141,18 +141,36 @@ class MediaService:
                 b64_json=item.b64_json, mime="image/png", prompt=prompt,
                 owner_user_id=owner_user_id,
             )
+
+        # 部分兼容网关返回临时 URL。这里在生成完成后由后端立即落成本地数据，
+        # 避免正文引用 /api/media/{id}/raw 时出现远端 404、鉴权失效或临时链接过期。
         if item.url:
-            row = MediaAsset(
-                id=uuid4().hex, name=f"生成图：{prompt[:60]}", alt=prompt[:200],
-                visual_description=prompt[:1000],
-                usage_hint="AI 生成", mime="image/png", source=item.url,
-                origin="generated", generation_prompt=prompt, tags=["AI 生成"],
-                description_source="generation_prompt",
+            import base64
+
+            import httpx
+            try:
+                response = httpx.get(
+                    str(item.url),
+                    follow_redirects=True,
+                    timeout=30,
+                )
+                response.raise_for_status()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"图片生成成功，但下载结果失败：{exc}",
+                ) from None
+            mime = response.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+            if not mime.startswith("image/") or not response.content:
+                raise HTTPException(status_code=502, detail="图片生成返回的不是有效图片")
+            if len(response.content) > 20 * 1024 * 1024:
+                raise HTTPException(status_code=502, detail="生成的图片超过 20MB，无法入库")
+            return self.add_generated(
+                b64_json=base64.b64encode(response.content).decode("ascii"),
+                mime=mime,
+                prompt=prompt,
                 owner_user_id=owner_user_id,
             )
-            self.db.add(row)
-            self.db.commit()
-            return self._out(row)
         raise HTTPException(status_code=502, detail="图片生成没有返回内容")
 
     def update(

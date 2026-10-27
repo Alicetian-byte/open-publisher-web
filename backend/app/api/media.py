@@ -145,4 +145,17 @@ def raw_media(
 
         data = base64.b64decode(b64)
         return Response(content=data, media_type=row.mime)
+    # 兼容历史生成任务：模型网关可能只返回临时 URL。仅允许后端生成的素材走代理，
+    # 避免把用户上传/外部素材库变成任意 SSRF 入口。
+    if row.origin == "generated" and row.source.startswith(("http://", "https://")):
+        import httpx
+        try:
+            response = httpx.get(row.source, follow_redirects=True, timeout=30)
+            response.raise_for_status()
+        except Exception:  # noqa: BLE001 - 上游临时链接可能过期
+            raise HTTPException(status_code=404, detail="remote asset is unavailable") from None
+        content_type = response.headers.get("content-type", row.mime).split(";", 1)[0].strip()
+        if not content_type.startswith("image/") or not response.content or len(response.content) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=404, detail="remote asset is not a valid image")
+        return Response(content=response.content, media_type=content_type)
     raise HTTPException(status_code=404, detail="remote asset has no local raw content")

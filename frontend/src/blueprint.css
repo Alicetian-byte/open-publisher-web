@@ -9239,3 +9239,76 @@ body.is-pane-dragging {
     flex: 1 1 100%;
   }
 }
+
+
+/* 文章编辑助手：可拖动悬浮小窗，不再和 AI 修改 / 配图侧栏争抢编辑区宽度。 */
+.article-assistant-window {
+  position: fixed;
+  z-index: 82;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: min(340px, calc(100vw - 24px));
+  height: min(520px, calc(100vh - 96px));
+  box-sizing: border-box;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay, 0 18px 44px rgba(15, 23, 42, .18));
+  overflow: hidden;
+}
+
+.article-assistant-window__head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.article-assistant-window__drag {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: grab;
+  text-align: left;
+  touch-action: none;
+  user-select: none;
+}
+
+.article-assistant-window__drag:active {
+  cursor: grabbing;
+}
+
+.article-assistant-window__title {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+
+.article-assistant-window__title strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.article-assistant-window__title small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .article-assistant-window {
+    height: min(480px, calc(100vh - 48px));
+  }
+}

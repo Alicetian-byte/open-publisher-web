@@ -15,6 +15,7 @@ import {
 import { MarkdownWorkbench, type ImageInsertion, type MarkdownSelection, type PreviewPlatform } from "../components/article/MarkdownWorkbench";
 import { ArticleImagePane, type ArticleFigure } from "../components/article/ArticleImagePane";
 import { InsertPositionDialog } from "../components/article/InsertPositionDialog";
+import { useVisualPlan, type VisualPlanSummary } from "../components/article/VisualPlanProvider";
 import ArticleRunTimeline from "../components/ArticleRunTimeline";
 import { articleNodeLabel } from "../workflow/articleNodes";
 import { insertMarkdownAtLine, moveMarkdownSpanToLine, removeMarkdownSpan } from "../components/article/articleMarkdown";
@@ -38,33 +39,7 @@ interface RunEventItem {
   payload?: Record<string, unknown>;
 }
 
-interface VisualPlanPlacement {
-  id: string;
-  anchorHeading: string | null;
-  anchorExcerpt: string | null;
-  alt: string;
-  source: "existing_asset" | "generate";
-  assetId: string | null;
-  candidates: Array<{ assetId: string; score: number; description: string }>;
-  selectionReason: string;
-  generationPrompt: string;
-}
-
-interface VisualPlanSummary {
-  targetCount: number;
-  placements: VisualPlanPlacement[];
-  sourceRevisionId: string | null;
-  sourceContentHash: string | null;
-  /** 创作页选择的具体生图模型；手动触发时为空（走全局默认）。 */
-  imageModelId?: string | null;
-}
-
-interface VisualApplyResult {
-  article: ArticleState;
-  insertedCount: number;
-  skipped: Array<{ id: string; reason: string }>;
-}
-
+// 智能配图的任务状态与类型由全局 VisualPlanProvider 统一持有。
 
 // 创作事件（RunJournal）的可读文案与状态图标
 const JOURNAL_LABELS: Record<string, string> = {
@@ -135,8 +110,6 @@ export default function ArticlesPage() {
   const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("split");
   const [previewPlatform, setPreviewPlatform] = useState<PreviewPlatform>("general");
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
-  const [visualBusy, setVisualBusy] = useState(false);
-  const [visualPlan, setVisualPlan] = useState<VisualPlanSummary | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -149,11 +122,18 @@ export default function ArticlesPage() {
     currentRevisionId: string | null;
     contentHash: string | null;
   } | null>(null);
-  const [excludedPlacementIds, setExcludedPlacementIds] = useState<string[]>([]);
   const [referenceNote, setReferenceNote] = useState<string | null>(null);
+  const [visualResultNote, setVisualResultNote] = useState<string | null>(null);
   const [referenceNames, setReferenceNames] = useState<string[]>([]);
   const [referenceDrag, setReferenceDrag] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const {
+    busy: visualBusy,
+    completed: completedVisualApply,
+    startPlan: startVisualPlanJob,
+    setPlanForArticle: setVisualPlanForArticle,
+    consumeCompleted: consumeCompletedVisualApply,
+  } = useVisualPlan();
   const userEditedRef = useRef(false);
   // F-007 受控打字机：SSE 增量进队列，requestAnimationFrame 逐字渲染，
   // 手动编辑（userEditedRef）立即清空队列，AI 不会覆盖用户输入。
@@ -360,6 +340,7 @@ export default function ArticlesPage() {
     const visualKey = `gaoliu.visual-applied:${activeRun.runId}`;
     void (async () => {
       let pendingVisualPlan: VisualPlanSummary | null = null;
+      let refreshedArticle: ArticleState | null = null;
       if (visualPlan?.enabled && !sessionStorage.getItem(visualKey)) {
         sessionStorage.setItem(visualKey, "1");
         try {
@@ -379,18 +360,62 @@ export default function ArticlesPage() {
           bridge.getArticle(activeRun.articleId),
           loadArticles(),
         ]);
+        refreshedArticle = article;
         setSelected(article);
         if (!userEditedRef.current) setDraft(article.markdown);
       } catch {
         void loadArticles();
       }
       // 文章已加载进编辑器后，弹出确认框让用户审核方案再真正生图。
-      if (pendingVisualPlan) {
-        setExcludedPlacementIds([]);
-        setVisualPlan(pendingVisualPlan);
+      if (pendingVisualPlan && refreshedArticle) {
+        setVisualPlanForArticle(
+          activeRun.articleId,
+          pendingVisualPlan,
+          {
+            revisionId: refreshedArticle.currentRevisionId,
+            contentHash: refreshedArticle.contentHash,
+            markdown: refreshedArticle.markdown,
+          },
+        );
       }
     })();
   }, [activeRun, followedRunArticleId, loadArticles, runStatus]);
+
+  // 全局配图任务完成后，回到文章页时仍能刷新正文并保留撤销快照。
+  useEffect(() => {
+    if (!completedVisualApply) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (selected?.articleId !== completedVisualApply.articleId) {
+          const fresh = await api.get<ArticleState>(`/articles/${completedVisualApply.articleId}`);
+          if (cancelled) return;
+          setSelected(fresh.data);
+        }
+        if (cancelled) return;
+        setSelected(completedVisualApply.article);
+        if (!userEditedRef.current) setDraft(completedVisualApply.article.markdown);
+        setVisualResultNote(
+          completedVisualApply.skipped.length
+            ? `已插入 ${completedVisualApply.insertedCount} 张配图；${completedVisualApply.skipped.length} 张未插入：${completedVisualApply.skipped.map((item) => item.reason).join("；")}`
+            : `已插入 ${completedVisualApply.insertedCount} 张配图。`,
+        );
+        setLastAiSnapshot({
+          label: "智能配图",
+          markdown: completedVisualApply.snapshot.markdown,
+          currentRevisionId: completedVisualApply.snapshot.revisionId,
+          contentHash: completedVisualApply.snapshot.contentHash,
+        });
+        consumeCompletedVisualApply();
+        void loadArticles();
+      } catch {
+        if (!cancelled) setError("配图完成，但刷新文章失败；请重新进入文章页。");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [completedVisualApply, consumeCompletedVisualApply, loadArticles, selected?.articleId]);
 
   const filtered = articles.filter(
     (a) =>
@@ -473,66 +498,20 @@ export default function ArticlesPage() {
     }
   };
 
-  // 智能配图：蓝本 visual-plan → 用户确认 → visual-apply 的三段式 Web 版
+  // 智能配图：规划与应用都交给全局 Provider，防止页面切换丢失生图进度。
   const startVisualPlan = async () => {
     if (!selected || visualBusy) return;
-    setExcludedPlacementIds([]);
-    setVisualBusy(true);
     setError(null);
-    try {
-      const res = await api.post<VisualPlanSummary>(
-        `/articles/${selected.articleId}/visual-plan`,
-        { targetCount: 2, assetIds: [] },
-      );
-      if (res.data.placements.length === 0) {
-        setError("视觉规划认为本文不需要配图。");
-      } else {
-        setVisualPlan(res.data);
-      }
-    } catch {
-      setError("配图规划失败，请稍后重试。");
-    } finally {
-      setVisualBusy(false);
-    }
-  };
-
-  const confirmVisualApply = async () => {
-    if (!selected || !visualPlan || visualBusy) return;
-    const placements = visualPlan.placements.filter(
-      (placement) => !excludedPlacementIds.includes(placement.id),
-    );
-    if (!placements.length) {
-      setError("请至少保留一张配图，或关闭方案。");
-      return;
-    }
-    setLastAiSnapshot({
-      label: "智能配图",
-      markdown: selected.markdown,
-      currentRevisionId: selected.currentRevisionId,
-      contentHash: selected.contentHash,
+    setVisualResultNote(null);
+    await startVisualPlanJob(selected.articleId, {
+      targetCount: 2,
+      assetIds: [],
+      snapshot: {
+        revisionId: selected.currentRevisionId,
+        contentHash: selected.contentHash,
+        markdown: selected.markdown,
+      },
     });
-    setVisualBusy(true);
-    setError(null);
-    try {
-      const res = await api.post<VisualApplyResult>(
-        `/articles/${selected.articleId}/visual-apply`,
-        {
-          baseRevisionId: selected.currentRevisionId,
-          baseContentHash: selected.contentHash,
-          placements,
-          imageModelId: visualPlan.imageModelId || null,
-        },
-      );
-      setSelected(res.data.article);
-      setDraft(res.data.article.markdown);
-      setVisualPlan(null);
-      setExcludedPlacementIds([]);
-      void loadArticles();
-    } catch {
-      setError("配图应用失败：文章可能已被修改，请刷新后重试。");
-    } finally {
-      setVisualBusy(false);
-    }
   };
 
   const saveVersion = async () => {
@@ -982,6 +961,11 @@ export default function ArticlesPage() {
                   修订 {selected.currentRevisionId?.slice(0, 8)}
                 </span>
               </div>
+              {visualResultNote && (
+                <p className="muted" style={{ fontSize: 12, margin: 0 }} role="status">
+                  {visualResultNote}
+                </p>
+              )}
               <div className="article-editor__workspace" ref={workspaceRef}>
                 <div className="article-editor__workbench">
                   <MarkdownWorkbench
@@ -1092,85 +1076,28 @@ export default function ArticlesPage() {
               <p className="muted">从左侧选择文章，或点右上角 + 新建创作</p>
             </div>
           )}
+          {selected && !creating && assistantOpen && (
+            <AssistantDrawer
+              articleId={selected.articleId}
+              markdown={draft}
+              onClose={() => setAssistantOpen(false)}
+              selection={rewriteSelection}
+              onApplySelection={(replacement) => {
+                if (rewriteSelection) {
+                  setDraft(
+                    draft.slice(0, rewriteSelection.start) +
+                    replacement +
+                    draft.slice(rewriteSelection.end),
+                  );
+                  setRewriteSelection(null);
+                } else {
+                  setDraft(draft + "\n\n" + replacement);
+                }
+              }}
+            />
+          )}
         </div>
-        {selected && !creating && assistantOpen && (
-          <AssistantDrawer
-                              articleId={selected.articleId}
-                              markdown={draft}
-                              selection={rewriteSelection}
-                              onApplySelection={(replacement) => {
-                                if (rewriteSelection) {
-                                  setDraft(
-                                    draft.slice(0, rewriteSelection.start) +
-                                    replacement +
-                                    draft.slice(rewriteSelection.end),
-                                  );
-                                  setRewriteSelection(null);
-                                } else {
-                                  setDraft(draft + "\n\n" + replacement);
-                                }
-                              }}
-                            />
-        )}
       </div>
-      {selected && visualPlan && (
-        <div className="studio-modal" role="presentation" onClick={() => setVisualPlan(null)}>
-          <div className="studio-modal__scrim" />
-          <section aria-label="确认配图方案" aria-modal="true" className="creation-picker__dialog" role="dialog"
-            onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560, width: "min(560px, 100%)" }}>
-            <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <span className="page-kicker">智能配图</span>
-                <h2>确认配图方案（{visualPlan.placements.length} 张）</h2>
-              </div>
-              <button className="icon-button" onClick={() => setVisualPlan(null)} type="button">✕</button>
-            </header>
-            <p className="muted">
-              素材库图片按匹配度自动选用；未达到阈值的位置将调用生图模型生成新图。
-            </p>
-            <ol style={{ display: "grid", gap: 10, marginTop: 12 }}>
-              {visualPlan.placements.map((placement) => (
-                <li key={placement.id} style={{ border: "1px solid var(--border, #ddd)", borderRadius: 12, padding: "10px 14px" }}>
-                  <strong>{placement.anchorHeading ?? "文章正文"}</strong>
-                  <span className="field-tag" style={{ marginLeft: 8 }}>
-                    {placement.source === "existing_asset" ? "使用素材库" : "AI 生成"}
-                  </span>
-                  <small style={{ display: "block", marginTop: 4 }}>
-                    {placement.selectionReason}｜alt：{placement.alt}
-                  </small>
-                  <div style={{ alignItems: "center", display: "flex", gap: 8, marginTop: 8 }}>
-                    <button
-                      className="button button--quiet"
-                      onClick={() => setExcludedPlacementIds((current) =>
-                        current.includes(placement.id)
-                          ? current.filter((id) => id !== placement.id)
-                          : [...current, placement.id])}
-                      type="button"
-                    >
-                      {excludedPlacementIds.includes(placement.id) ? "保留这张" : "不插入这张"}
-                    </button>
-                    {excludedPlacementIds.includes(placement.id) && (
-                      <small className="muted">确认应用时会跳过此位置。</small>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ol>
-            <footer style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
-              <button className="button button--quiet" onClick={() => setVisualPlan(null)} type="button">取消</button>
-              <button
-                className="button button--primary"
-                disabled={visualBusy}
-                onClick={() => void confirmVisualApply()}
-                type="button"
-              >
-                {visualBusy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-                确认并插入配图
-              </button>
-            </footer>
-          </section>
-        </div>
-      )}
       {selected && publishOpen && (
         <PublishDialog
           markdown={draft}

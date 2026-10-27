@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BarChart3, ImageIcon, LoaderCircle, MoreHorizontal, Plus, ScissorsLineDashed } from "lucide-react";
-import { renderMermaidSvg } from "./MarkdownPreview";
+import { renderMermaidSvg, resolveAssetReferences } from "./MarkdownPreview";
 import { InsertPositionDialog } from "./InsertPositionDialog";
 import { markdownLineOfOffset, type MarkdownSpan } from "./articleMarkdown";
 import type { ImageInsertion } from "./MarkdownWorkbench";
@@ -106,13 +106,13 @@ export function ArticleImagePane({
   onImageFileDrop,
   canInsert = true,
 }: ArticleImagePaneProps) {
-  // 只展示可加载的图片（站内素材、data URL、blob、http）和 mermaid 图表；
-  // AI 编造的本地路径（images/xxx.jpg）不渲染占位容器。
+  // asset:// 是正文里的紧凑素材引用；侧栏与预览一样先解析成站内原始图地址。
+  const resolvedMarkdown = useMemo(() => resolveAssetReferences(markdown), [markdown]);
   const figures = useMemo(
-    () => extractArticleFigures(markdown).filter(
+    () => extractArticleFigures(resolvedMarkdown).filter(
       (figure) => figure.kind === "mermaid" || isEmbeddableImageSrc(figure.src),
     ),
-    [markdown],
+    [resolvedMarkdown],
   );
   const [uploads, setUploads] = useState<ImageInsertion[]>([]);
   const [isDropping, setIsDropping] = useState(false);
@@ -121,6 +121,22 @@ export function ArticleImagePane({
   const [lineDialog, setLineDialog] = useState<LineDialog>(null);
   const [menuFor, setMenuFor] = useState<number | null>(null);
   const [preview, setPreview] = useState<{ src: string; alt: string } | null>(null);
+  const [failedFigureKeys, setFailedFigureKeys] = useState<Set<string>>(new Set());
+  const [failedUploadKeys, setFailedUploadKeys] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setFailedFigureKeys(new Set());
+  }, [resolvedMarkdown]);
+
+  const markFailedFigure = (figure: ArticleFigure) => {
+    if (figure.kind !== "image") return;
+    const key = `${figure.span.start}:${figure.src}`;
+    setFailedFigureKeys((current) => new Set(current).add(key));
+  };
+
+  const markFailedUpload = (asset: ImageInsertion) => {
+    setFailedUploadKeys((current) => new Set(current).add(asset.src));
+  };
 
   const importFiles = async (files: File[]) => {
     if (!onImageFileDrop) {
@@ -158,6 +174,13 @@ export function ArticleImagePane({
     setLineDialog(null);
   };
 
+  // 计数只反映真实可见内容；加载失败/失效引用不再占位，也不再算进角标。
+  const visibleFigures = figures.filter((figure) =>
+    figure.kind === "mermaid"
+    || !failedFigureKeys.has(`${figure.span.start}:${figure.src}`));
+  const visibleUploads = uploads.filter((asset) => !failedUploadKeys.has(asset.src));
+  const hasVisibleContent = visibleFigures.length > 0 || visibleUploads.length > 0;
+
   return (
     <aside
       aria-label="文章配图"
@@ -182,7 +205,7 @@ export function ArticleImagePane({
         <div className="article-figures__title">
           <ImageIcon size={15} />
           <span>配图</span>
-          <span className="field-tag">{figures.length}</span>
+          <span className="field-tag">{visibleFigures.length + visibleUploads.length}</span>
         </div>
         {onImageFileDrop && (
           <label className="button button--quiet article-figures__upload">
@@ -203,114 +226,128 @@ export function ArticleImagePane({
       </header>
 
       <div className="article-figures__scroll">
-        <p className="article-figures__section-label">正文配图与图表</p>
-        {figures.length === 0 ? (
+        {!hasVisibleContent ? (
           <p className="article-figures__empty">
-            正文还没有配图。创作生成的图表会显示在这里；也可以上传图片后按行号插入。
+            正文暂无可见配图；可上传素材后插入，或使用「智能配图」生成。失效图片不会保留空位。
           </p>
         ) : (
-          <div className="article-figures__grid">
-            {figures.map((figure, index) => (
-              <figure
-                className={`article-figures__item${menuFor === index ? " is-menu-open" : ""}`}
-                key={`figure-${figure.span.start}`}
-                onMouseLeave={() => setMenuFor((current) => (current === index ? null : current))}
-              >
-                {figure.kind === "image" ? (
-                  <button
-                    aria-label={`预览 ${figure.alt || `配图 ${index + 1}`}`}
-                    className="article-figures__thumb"
-                    onClick={() => setPreview({ src: figure.src, alt: figure.alt || `配图 ${index + 1}` })}
-                    title="点击预览"
-                    type="button"
-                  >
-                    <img alt={figure.alt || `配图 ${index + 1}`} src={figure.src} />
-                  </button>
+          <>
+            {visibleFigures.length > 0 && (
+              <>
+                <p className="article-figures__section-label">正文配图与图表</p>
+                <div className="article-figures__grid">
+                  {visibleFigures.map((figure, index) => (
+                    <figure
+                      className={`article-figures__item${menuFor === index ? " is-menu-open" : ""}`}
+                      key={`figure-${figure.span.start}`}
+                      onMouseLeave={() => setMenuFor((current) => (current === index ? null : current))}
+                    >
+                      {figure.kind === "image" ? (
+                        <button
+                          aria-label={`预览 ${figure.alt || `配图 ${index + 1}`}`}
+                          className="article-figures__thumb"
+                          onClick={() => setPreview({ src: figure.src, alt: figure.alt || `配图 ${index + 1}` })}
+                          title="点击预览"
+                          type="button"
+                        >
+                          <img
+                            alt={figure.alt || `配图 ${index + 1}`}
+                            onError={() => markFailedFigure(figure)}
+                            src={figure.src}
+                          />
+                        </button>
+                      ) : (
+                        <MermaidThumb index={index} source={figure.source} />
+                      )}
+                      <figcaption
+                        title={figure.kind === "image" ? figure.alt || figure.src : "创作生成的图表"}
+                      >
+                        {figureCaption(figure, index)}
+                      </figcaption>
+                      {canInsert && (
+                        <button
+                          aria-expanded={menuFor === index}
+                          aria-haspopup="menu"
+                          aria-label={`编辑 ${figureCaption(figure, index)}`}
+                          className="article-figures__insert"
+                          onClick={() => setMenuFor((current) => (current === index ? null : index))}
+                          title="编辑：删除或移动位置"
+                          type="button"
+                        >
+                          <MoreHorizontal size={12} /> 编辑
+                        </button>
+                      )}
+                      {canInsert && menuFor === index && (
+                        <div aria-label={`编辑 ${figureCaption(figure, index)}`} className="article-figures__menu" role="menu">
+                          <button
+                            onClick={() => {
+                              setMenuFor(null);
+                              onDeleteFigure(figure);
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            删除
+                          </button>
+                          <button
+                            onClick={() => {
+                              setMenuFor(null);
+                              setLineDialog({ mode: "move", figure });
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            移动位置
+                          </button>
+                        </div>
+                      )}
+                    </figure>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {onImageFileDrop && (visibleUploads.length > 0 || visibleFigures.length === 0) && (
+              <>
+                <p className="article-figures__section-label">
+                  <ScissorsLineDashed size={12} /> 新上传素材
+                </p>
+                {visibleUploads.length === 0 ? (
+                  <p className="article-figures__empty">
+                    拖入或上传的图片会先列在这里，点「插入」输入行号后写入正文对应行。
+                  </p>
                 ) : (
-                  <MermaidThumb index={index} source={figure.source} />
-                )}
-                <figcaption
-                  title={figure.kind === "image" ? figure.alt || figure.src : "创作生成的图表"}
-                >
-                  {figureCaption(figure, index)}
-                </figcaption>
-                {canInsert && (
-                  <button
-                    aria-expanded={menuFor === index}
-                    aria-haspopup="menu"
-                    aria-label={`编辑 ${figureCaption(figure, index)}`}
-                    className="article-figures__insert"
-                    onClick={() => setMenuFor((current) => (current === index ? null : index))}
-                    title="编辑：删除或移动位置"
-                    type="button"
-                  >
-                    <MoreHorizontal size={12} /> 编辑
-                  </button>
-                )}
-                {canInsert && menuFor === index && (
-                  <div aria-label={`编辑 ${figureCaption(figure, index)}`} className="article-figures__menu" role="menu">
-                    <button
-                      onClick={() => {
-                        setMenuFor(null);
-                        onDeleteFigure(figure);
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      删除
-                    </button>
-                    <button
-                      onClick={() => {
-                        setMenuFor(null);
-                        setLineDialog({ mode: "move", figure });
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      移动位置
-                    </button>
+                  <div className="article-figures__grid">
+                    {visibleUploads.map((asset, index) => (
+                      <figure className="article-figures__item" key={`${asset.src}-${index}`}>
+                        <img
+                          alt={asset.alt}
+                          onError={() => markFailedUpload(asset)}
+                          src={asset.src}
+                        />
+                        <figcaption title={asset.alt}>{asset.alt}</figcaption>
+                        {canInsert && (
+                          <button
+                            aria-label={`插入 ${asset.alt}`}
+                            className="article-figures__insert"
+                            onClick={() =>
+                              setLineDialog({
+                                mode: "insert",
+                                snippet: `![${asset.alt}](${asset.src})`,
+                                alt: asset.alt,
+                              })
+                            }
+                            title="插入到正文指定行"
+                            type="button"
+                          >
+                            插入
+                          </button>
+                        )}
+                      </figure>
+                    ))}
                   </div>
                 )}
-              </figure>
-            ))}
-          </div>
-        )}
-
-        {onImageFileDrop && (
-          <>
-            <p className="article-figures__section-label">
-              <ScissorsLineDashed size={12} /> 新上传素材
-            </p>
-            {uploads.length === 0 ? (
-              <p className="article-figures__empty">
-                拖入或上传的图片会先列在这里，点「插入」输入行号后写入正文对应行。
-              </p>
-            ) : (
-              <div className="article-figures__grid">
-                {uploads.map((asset, index) => (
-                  <figure className="article-figures__item" key={`${asset.src}-${index}`}>
-                    <img alt={asset.alt} src={asset.src} />
-                    <figcaption title={asset.alt}>{asset.alt}</figcaption>
-                    {canInsert && (
-                      <button
-                        aria-label={`插入 ${asset.alt}`}
-                        className="article-figures__insert"
-                        onClick={() =>
-                          setLineDialog({
-                            mode: "insert",
-                            snippet: `![${asset.alt}](${asset.src})`,
-                            alt: asset.alt,
-                          })
-                        }
-                        title="插入到正文指定行"
-                        type="button"
-                      >
-                        插入
-                      </button>
-                    )}
-                  </figure>
-                ))}
-              </div>
+              </>
             )}
           </>
         )}

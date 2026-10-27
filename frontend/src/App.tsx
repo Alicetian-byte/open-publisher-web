@@ -10,6 +10,7 @@ import { AvatarMenu } from "./components/AvatarMenu";
 import { useThemeSetting } from "./lib/theme";
 import ArticlesPage from "./pages/ArticlesPage";
 import CreatePage from "./pages/CreatePage";
+import { VisualPlanProvider } from "./components/article/VisualPlanProvider";
 import AnnouncementsPage from "./pages/AnnouncementsPage";
 import TemplatesPage from "./pages/TemplatesPage";
 import MediaPage from "./pages/MediaPage";
@@ -158,11 +159,13 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ActiveRunProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/landing" element={<LandingPage />} />
-          <Route path="/*" element={<Shell />} />
-        </Routes>
+          <VisualPlanProvider>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/landing" element={<LandingPage />} />
+              <Route path="/*" element={<Shell />} />
+            </Routes>
+          </VisualPlanProvider>
         </ActiveRunProvider>
       </AuthProvider>
     </BrowserRouter>
