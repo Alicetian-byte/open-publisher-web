@@ -1114,11 +1114,10 @@ export default function ArticlesPage() {
         )}
       </div>
       {selected && visualPlan && (
-        <div className="studio-modal__scrim" onClick={() => setVisualPlan(null)} role="presentation">
-          <section aria-label="确认配图方案" aria-modal="true" role="dialog" style={{
-            position: "fixed", inset: "12% 20%", background: "var(--surface, #fff)",
-            borderRadius: 16, padding: "24px 28px", overflowY: "auto", zIndex: 60,
-          }}>
+        <div className="studio-modal" role="presentation" onClick={() => setVisualPlan(null)}>
+          <div className="studio-modal__scrim" />
+          <section aria-label="确认配图方案" aria-modal="true" className="creation-picker__dialog" role="dialog"
+            onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560, width: "min(560px, 100%)" }}>
             <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <span className="page-kicker">智能配图</span>

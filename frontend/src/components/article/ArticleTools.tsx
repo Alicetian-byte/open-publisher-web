@@ -564,14 +564,14 @@ export function PublishDialog({ revisionId, title, markdown, onClose }: PublishD
   }[state] ?? state);
 
   return (
-    <div className="studio-modal__scrim" onClick={onClose} role="presentation">
+    <div className="studio-modal" role="presentation" onClick={onClose}>
+      <div className="studio-modal__scrim" />
       <section
         aria-label="发布工作台"
         aria-modal="true"
-        className="creation-picker__dialog"
+        className="publish-dialog"
         onClick={(event) => event.stopPropagation()}
         role="dialog"
-        style={{ maxWidth: 720 }}
       >
         <header>
           <div>
@@ -581,11 +581,11 @@ export function PublishDialog({ revisionId, title, markdown, onClose }: PublishD
           <button aria-label="关闭" className="icon-button" onClick={onClose} type="button">×</button>
         </header>
 
-        <div style={{ display: "grid", gap: 14 }}>
+        <div className="publish-dialog__body">
           {!plan && (
             <>
               {targets.map((target, index) => (
-                <div key={index} style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr 1fr", minWidth: 0 }}>
+                <div key={index} style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr 1fr", minWidth: 0, marginBottom: 10 }}>
                   <label className="field"><span>平台</span>
                     <select
                       className="creation-select"
@@ -616,7 +616,7 @@ export function PublishDialog({ revisionId, title, markdown, onClose }: PublishD
                   </label>
                 </div>
               ))}
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
                   className="button button--quiet"
                   disabled={targets.length >= 6}
@@ -646,7 +646,7 @@ export function PublishDialog({ revisionId, title, markdown, onClose }: PublishD
 
           {plan && (
             <>
-              <div className="panel" style={{ margin: 0, padding: 10 }}>
+              <div className="panel" style={{ margin: "0 0 12px", padding: 12 }}>
                 <strong>计划状态：{plan.status}</strong>
                 <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
                   审批：{plan.approvalStatus} · 绑定哈希 {plan.approvalBindingHash?.slice(0, 18) ?? "未生成"}…
@@ -691,15 +691,19 @@ export function PublishDialog({ revisionId, title, markdown, onClose }: PublishD
           )}
 
           {log.length > 0 && (
-            <ol aria-label="发布流程记录" className="workflow-task__events">
+            <ol aria-label="发布流程记录" className="workflow-task__events" style={{ marginTop: 12 }}>
               {log.map((line, index) => <li key={index}><span>{line}</span></li>)}
             </ol>
           )}
           {error && <p className="workflow-task__failure">{error}</p>}
-          <p className="muted">
+          <p className="muted" style={{ marginTop: 12, fontSize: 11 }}>
             dry-run 不创建真实平台内容；微信草稿通道保留为可配置扩展，未知结果必须显式核验或人工 resolve。
           </p>
         </div>
+
+        <footer>
+          <button className="button button--quiet" onClick={onClose} type="button">关闭</button>
+        </footer>
       </section>
     </div>
   );
