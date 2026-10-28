@@ -1,8 +1,8 @@
-"""视觉规划服务：蓝本 visual-planning-service 的 Web 确定性版（第一版）。
+"""视觉规划服务：蓝本 visual-planning-service 的模型驱动版。
 
 蓝本分两层：文本模型产出结构化 placement；模型不可用时降级为本地
-确定性规划器（Baoyu illustrator 规则）。Web 版第一阶段直接采用
-确定性规划器（无额外模型调用、可离线），素材匹配沿用同一契约：
+确定性规划器。Web 版沿用同一契约，默认优先调用文本模型，失败或未
+配置密钥时自动降级为确定性规划器：
 - 每个位置对素材做 0-1000 相似度打分，取前 5 个候选；
 - 最高分 >= materialMatchThreshold * 10 时 source=existing_asset，
   否则 source=generate 并生成可复现的生图提示词；
@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from uuid import uuid4
@@ -175,7 +176,194 @@ def _alt_for(block: MarkdownBlock, ordinal: int) -> str:
     return re.sub(r"[\[\]\r\n]", " ", base).strip() or f"文章配图 {ordinal}"
 
 
+def _clean_text(value: object, limit: int = 900) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+def _match_block(
+    placement: dict, blocks: list[MarkdownBlock],
+) -> MarkdownBlock | None:
+    """按模型给出的标题/摘录反查正文块；精确命中优先，其次包含度。"""
+    heading = _clean_text(placement.get("anchorHeading") or placement.get("afterHeading"))
+    excerpt = _clean_text(placement.get("anchorExcerpt") or placement.get("position"))
+    if heading:
+        exact = [b for b in blocks if b.heading == heading]
+        if exact:
+            return exact[0]
+    for block in blocks:
+        haystack = f"{block.heading or ''}\n{block.text}"
+        if excerpt and excerpt in haystack:
+            return block
+        if heading and heading in haystack:
+            return block
+    scored = sorted(
+        blocks,
+        key=lambda block: max(
+            _similarity(excerpt, f"{block.heading or ''}\n{block.text}"),
+            _similarity(heading, block.heading or "") if heading else 0,
+        ),
+        reverse=True,
+    )
+    return scored[0] if scored and (excerpt or heading) else None
+
+
+def _visual_model_prompt(
+    blocks: list[MarkdownBlock], assets: list[MediaAsset], target_count: int,
+    material_match_threshold: int,
+) -> tuple[str, str]:
+    asset_briefs = [
+        {
+            "id": asset.id, "alt": asset.alt,
+            "description": _clean_text(asset.visual_description or asset.alt, 240),
+            "usage": _clean_text(asset.usage_hint, 120),
+            "tags": asset.tags or [],
+        }
+        for asset in assets
+    ]
+    section_briefs = [
+        {
+            "heading": block.heading,
+            "excerpt": block.excerpt,
+            "content": _clean_text(block.text, 900),
+        }
+        for block in blocks
+    ]
+    system = (
+        "You are the planning phase of the article illustrator. "
+        "Return a strict JSON object with a placements array. Do not create images. "
+        "Each placement teaches one concrete relationship, comparison, process, "
+        "framework or timeline. Prefer sparse explanatory visuals over decorative posters. "
+        "Never ask for paragraphs, tables, UI screenshots or many labels inside the image. "
+        "Use an existing asset only when its metadata serves the visual need, and at most once. "
+        "Otherwise use generate. Return exactly the requested number of placements."
+    )
+    user = json.dumps({
+        "targetCount": target_count,
+        "materialMatchThreshold": material_match_threshold * 10,
+        "sections": section_briefs,
+        "assets": asset_briefs,
+        "placementSchema": {
+            "anchorHeading": "Section heading or null",
+            "anchorExcerpt": "A short verbatim excerpt used to locate the insertion point",
+            "purpose": "Why this visual helps readers",
+            "visualType": "scene | flowchart | comparison | timeline",
+            "source": "existing_asset | generate",
+            "assetId": "Asset id for existing_asset, otherwise null",
+            "selectionReason": "Short reason",
+            "alt": "Concise image alt text",
+            "generationPrompt": "Concrete visual brief; no text, letters, numbers or watermark",
+        },
+    }, ensure_ascii=False)
+    return system, user
+
+
+def _model_plan(
+    blocks: list[MarkdownBlock],
+    assets: list[MediaAsset],
+    *,
+    target_count: int,
+    material_match_threshold: int,
+) -> tuple[list[dict], str | None] | None:
+    """模型驱动规划；不可用/输出不合法时返回 None 以触发规则兜底。"""
+    from app.agents.llm_client import LLMClient
+
+    llm = LLMClient()
+    if not llm.api_key_configured:
+        return None
+    system, user = _visual_model_prompt(
+        blocks, assets, target_count, material_match_threshold,
+    )
+    try:
+        data = llm.complete_json(system, user, temperature=0.25)
+    except Exception:  # noqa: BLE001 - 规划失败必须无感回退
+        return None
+    candidates = data.get("placements")
+    if not isinstance(candidates, list) or len(candidates) != target_count:
+        return None
+
+    placements: list[dict] = []
+    used_assets: set[str] = set()
+    for ordinal, raw in enumerate(candidates, start=1):
+        if not isinstance(raw, dict):
+            return None
+        block = _match_block(raw, blocks)
+        if block is None:
+            return None
+        visual_type = _clean_text(raw.get("visualType"), 40)
+        if visual_type not in _VISUAL_FORM:
+            visual_type = _visual_type(block.text)
+        asset_id = _clean_text(raw.get("assetId"), 100) or None
+        candidates_for_block = _candidates_for(block, assets)
+        source = "existing_asset" if _clean_text(raw.get("source")) == "existing_asset" else "generate"
+        valid_asset = next(
+            (c for c in candidates_for_block if c["assetId"] == asset_id),
+            None,
+        )
+        if source == "existing_asset" and (valid_asset is None or asset_id in used_assets):
+            source, asset_id = "generate", None
+        if source == "existing_asset" and asset_id:
+            used_assets.add(asset_id)
+        alt = re.sub(r"[\[\]\r\n]", " ", _clean_text(raw.get("alt"), 160)).strip()
+        placements.append({
+            "id": f"illustration-{ordinal}",
+            "anchorHeading": block.heading,
+            "anchorExcerpt": block.excerpt,
+            "purpose": _clean_text(raw.get("purpose"), 400) or "补充小节说明",
+            "visualType": visual_type,
+            "source": source,
+            "assetId": asset_id,
+            "candidates": candidates_for_block,
+            "selectionReason": _clean_text(raw.get("selectionReason"), 500) or (
+                f"素材与该小节匹配度 {valid_asset['score'] // 10}%。"
+                if valid_asset else "没有达到阈值的可用素材，需生成新图。"
+            ),
+            "alt": alt or _alt_for(block, ordinal),
+            "generationPrompt": _clean_text(raw.get("generationPrompt"), 1600)
+                or _generation_prompt(block),
+        })
+    return placements, llm.model
+
+
+def _fallback_plan(
+    chosen: list[MarkdownBlock], assets: list[MediaAsset], *,
+    material_match_threshold: int,
+) -> list[dict]:
+    placements: list[dict] = []
+    used_assets: set[str] = set()
+    for ordinal, block in enumerate(chosen, start=1):
+        candidates = _candidates_for(block, assets)
+        default = next(
+            (
+                c for c in candidates
+                if c["score"] >= material_match_threshold * 10
+                and c["assetId"] not in used_assets
+            ),
+            None,
+        )
+        if default is not None:
+            used_assets.add(default["assetId"])
+        placements.append({
+            "id": f"illustration-{ordinal}",
+            "anchorHeading": block.heading,
+            "anchorExcerpt": block.excerpt,
+            "purpose": "补充小节说明",
+            "visualType": _visual_type(block.text),
+            "source": "existing_asset" if default else "generate",
+            "assetId": default["assetId"] if default else None,
+            "candidates": candidates,
+            "selectionReason": (
+                f"素材与该小节匹配度 {default['score'] // 10}%。"
+                if default
+                else "没有达到阈值的可用素材，需生成新图。"
+            ),
+            "alt": _alt_for(block, ordinal),
+            "generationPrompt": _generation_prompt(block),
+        })
+    return placements
+
+
 class VisualService:
+
     def __init__(self, db: Session):
         self.db = db
         self.store = ArticleStore(db)
@@ -199,41 +387,30 @@ class VisualService:
             by_id = {row.id: row for row in rows}
             assets = [by_id[asset_id] for asset_id in asset_ids if asset_id in by_id]
 
-        placements: list[dict] = []
-        used_assets: set[str] = set()
-        for ordinal, block in enumerate(chosen, start=1):
-            candidates = _candidates_for(block, assets)
-            default = next(
-                (
-                    c for c in candidates
-                    if c["score"] >= material_match_threshold * 10
-                    and c["assetId"] not in used_assets
-                ),
-                None,
+        if chosen:
+            model_result = _model_plan(
+                blocks, assets,
+                target_count=len(chosen),
+                material_match_threshold=material_match_threshold,
             )
-            if default is not None:
-                used_assets.add(default["assetId"])
-            placements.append({
-                "id": f"illustration-{ordinal}",
-                "anchorHeading": block.heading,
-                "anchorExcerpt": block.excerpt,
-                "purpose": "补充小节说明",
-                "visualType": _visual_type(block.text),
-                "source": "existing_asset" if default else "generate",
-                "assetId": default["assetId"] if default else None,
-                "candidates": candidates,
-                "selectionReason": (
-                    f"素材与该小节匹配度 {default['score'] // 10}%。"
-                    if default
-                    else "没有达到阈值的可用素材，需生成新图。"
-                ),
-                "alt": _alt_for(block, ordinal),
-                "generationPrompt": _generation_prompt(block),
-            })
+            if model_result:
+                placements, provider_model = model_result
+                return {
+                    "sourceContentHash": None,  # apply 时以前端提交的哈希做并发校验
+                    "targetCount": len(placements),
+                    "placements": placements,
+                    "planner": "model",
+                    "plannerModel": provider_model,
+                }
+        placements = _fallback_plan(
+            chosen, assets, material_match_threshold=material_match_threshold,
+        )
         return {
             "sourceContentHash": None,  # apply 时以前端提交的哈希做并发校验
             "targetCount": len(placements),
             "placements": placements,
+            "planner": "deterministic",
+            "plannerModel": None,
         }
 
     def apply(

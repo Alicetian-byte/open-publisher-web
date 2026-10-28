@@ -83,6 +83,55 @@ def generate_media(
     )
 
 
+class MediaPreviewRequest(BaseModel):
+    """预览生成：只返回 data URL，不落库。"""
+    prompt: str = Field(min_length=1, max_length=2000)
+    size: str = "1024x1024"
+    imageModelId: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/preview")
+def preview_media(
+    body: MediaPreviewRequest,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require_user),
+):
+    """生成预览图：调用生图 API 返回 data URL，但不创建素材库记录。"""
+    import base64 as _base64
+    from app.services.model_profile_service import resolve_image_config
+
+    resolved = resolve_image_config(db=db, profile_id=body.imageModelId)
+    if not resolved["api_key"]:
+        raise HTTPException(status_code=501, detail="生图模型未配置密钥")
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=resolved["api_key"], base_url=resolved["base_url"],
+        timeout=resolved["timeout_seconds"],
+    )
+    try:
+        result = client.images.generate(
+            model=resolved["model"], prompt=body.prompt, size=body.size, n=1,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"预览生成失败：{exc}") from None
+    item = result.data[0]
+    if item.b64_json:
+        return {"source": f"data:image/png;base64,{item.b64_json}"}
+    if item.url:
+        import httpx as _httpx
+        try:
+            resp = _httpx.get(str(item.url), follow_redirects=True, timeout=30)
+            resp.raise_for_status()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"预览图下载失败：{exc}") from None
+        mime = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+        if not mime.startswith("image/") or not resp.content:
+            raise HTTPException(status_code=502, detail="预览返回的不是有效图片")
+        return {"source": f"data:{mime};base64,{_base64.b64encode(resp.content).decode('ascii')}"}
+    raise HTTPException(status_code=502, detail="生图 API 没有返回内容")
+
+
 @router.delete("/{asset_id}", status_code=204)
 def delete_media(
     asset_id: str,

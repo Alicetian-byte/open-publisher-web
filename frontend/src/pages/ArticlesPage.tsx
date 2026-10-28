@@ -1169,7 +1169,7 @@ function ImagePickerDialog({
         className="creation-picker__dialog"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        style={{ maxWidth: 560 }}
+        
       >
         <header>
           <div>
@@ -1183,29 +1183,25 @@ function ImagePickerDialog({
         {assets.length === 0 ? (
           <p className="muted">素材库为空，请先到「素材库」上传或生成图片。</p>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, maxHeight: 380, overflowY: "auto" }}>
+          <div className="creation-picker__media" style={{ maxHeight: 420 }}>
             {assets.map((asset) => (
               <button
                 aria-label={`插入 ${asset.name}`}
-                className="panel"
                 key={asset.id}
                 onClick={() =>
                   onInsert(`![${asset.alt || asset.name}](/api/media/${asset.id}/raw)`)
                 }
-                style={{ border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", padding: 6 }}
                 type="button"
               >
                 <img
                   alt={asset.alt || asset.name}
                   src={asset.source}
-                  style={{ width: "100%", height: 90, objectFit: "cover", borderRadius: 6 }}
+                  loading="lazy"
                 />
-                <small
-                  className="muted"
-                  style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                >
-                  {asset.name}
-                </small>
+                <div style={{ minWidth: 0 }}>
+                  <strong>{asset.name}</strong>
+                  {asset.alt && <small>{asset.alt}</small>}
+                </div>
               </button>
             ))}
           </div>

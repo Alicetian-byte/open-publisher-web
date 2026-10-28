@@ -191,7 +191,32 @@ class LLMClient:
             raise LLMError(f"LLM 调用失败：{exc}") from exc
 
     def complete_json(
-        self, system: str, user: str, *, temperature: float = 0.7
+        self, system: str, user: str, *, temperature: float = 0.7,
+        images: list[str] | None = None,
     ) -> dict:
+        """JSON 模式；支持 data URL 图片输入（需模型档案开启 vision）。"""
+        if images:
+            if not self.capabilities.get("vision"):
+                raise LLMError("当前模型档案未开启图片理解能力。")
+            content: str | list[dict] = [
+                {"type": "text", "text": user},
+                *[{"type": "image_url", "image_url": {"url": image}} for image in images],
+            ]
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": content},
+                    ],
+                    **self._options(temperature),
+                    response_format={"type": "json_object"},
+                )
+                self.call_count += 1
+                return parse_json_dict(response.choices[0].message.content or "")
+            except LLMError:
+                raise
+            except Exception as exc:
+                raise LLMError(f"LLM 调用失败：{exc}") from exc
         text = self.complete(system, user, json_mode=True, temperature=temperature)
         return parse_json_dict(text)

@@ -324,113 +324,308 @@ export default function MediaPage() {
         ) : assets.length === 0 ? (
           <p className="muted">没有匹配的素材。上传图片或调整筛选。</p>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12, alignContent: "start" }}>
-            {assets.map((asset) => (
-              <figure
-                className="panel"
-                draggable
-                key={asset.id}
-                onDragStart={(event) => {
-                  event.dataTransfer.setData("text/x-media-markdown", mediaMarkdown(asset));
-                  event.dataTransfer.effectAllowed = "copy";
-                }}
-                style={{ display: "grid", gap: 8, margin: 0, padding: 10 }}
-                title="拖入文章编辑器光标处插入"
-              >
-                <div style={{ position: "relative" }}>
-                  <img
-                    alt={asset.alt || asset.name}
-                    src={asset.source}
-                    style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8 }}
-                  />
-                  <button
-                    aria-label={`选择 ${asset.name}`}
-                    className="icon-button"
-                    onClick={() => toggleSelected(asset.id)}
-                    style={{ position: "absolute", right: 6, top: 6 }}
-                    type="button"
-                  >
-                    {selectedIds.includes(asset.id) ? <Check size={14} /> : " "}
-                  </button>
-                </div>
-                <figcaption style={{ display: "grid", fontSize: 12, gap: 4 }}>
-                  <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{asset.name}</strong>
-                  <span className="muted">{asset.origin === "generated" ? "AI 生成" : "上传"}</span>
-                  <span className="muted" style={{ minHeight: 30 }}>
-                    {asset.visualDescription || "缺少视觉描述"}
-                  </span>
-                  {(asset.tags ?? []).length > 0 && (
-                    <span style={{ color: "var(--accent)", fontSize: 11 }}>{asset.tags.join(" · ")}</span>
-                  )}
-                </figcaption>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button
-                    className="button button--quiet"
-                    onClick={() => { setSelected(asset); setForm(toForm(asset)); }}
-                    type="button"
-                  >
-                    <Pencil size={13} />编辑
-                  </button>
-                  <button aria-label={`复制 ${asset.name} Markdown`} className="icon-button" onClick={() => void copyMarkdown(asset)} type="button">
-                    {copiedId === asset.id ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                  <button aria-label={`删除 ${asset.name}`} className="icon-button" onClick={() => void remove(asset.id)} type="button">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </figure>
-            ))}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14, alignContent: "start" }}>
+            {assets.map((asset) => {
+              const isSelected = selectedIds.includes(asset.id);
+              const isGenerated = asset.origin === "generated";
+              return (
+                <figure
+                  draggable
+                  key={asset.id}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("text/x-media-markdown", mediaMarkdown(asset));
+                    event.dataTransfer.effectAllowed = "copy";
+                  }}
+                  style={{
+                    background: "var(--surface, #fff)",
+                    border: `1px solid ${isSelected ? "var(--accent, #5b8def)" : "var(--border, #e5e5e5)"}`,
+                    borderRadius: 12,
+                    boxShadow: isSelected ? "0 0 0 2px color-mix(in srgb, var(--accent, #5b8def) 15%, transparent)" : "none",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 0,
+                    margin: 0,
+                    overflow: "hidden",
+                    padding: 0,
+                    transition: "box-shadow 150ms ease, transform 150ms ease",
+                  }}
+                  title="拖入文章编辑器光标处插入"
+                >
+                  {/* Image area with fixed aspect ratio */}
+                  <div style={{ aspectRatio: "4/3", position: "relative", overflow: "hidden" }}>
+                    <img
+                      alt={asset.alt || asset.name}
+                      src={asset.source}
+                      style={{ height: "100%", objectFit: "cover", width: "100%" }}
+                    />
+                    {/* Origin badge */}
+                    <span style={{
+                      alignItems: "center",
+                      background: isGenerated
+                        ? "color-mix(in srgb, var(--accent, #5b8def) 85%, transparent)"
+                        : "color-mix(in srgb, #333 65%, transparent)",
+                      backdropFilter: "blur(4px)",
+                      borderRadius: 6,
+                      color: "#fff",
+                      display: "flex",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      gap: 3,
+                      left: 8,
+                      padding: "3px 8px",
+                      position: "absolute",
+                      top: 8,
+                    }}>
+                      {isGenerated ? <ImagePlus size={11} /> : <Upload size={11} />}
+                      {isGenerated ? "AI 生成" : "上传"}
+                    </span>
+                    {/* Select checkbox */}
+                    <button
+                      aria-label={`选择 ${asset.name}`}
+                      onClick={(e) => { e.stopPropagation(); toggleSelected(asset.id); }}
+                      style={{
+                        alignItems: "center",
+                        background: isSelected ? "var(--accent, #5b8def)" : "rgba(0,0,0,0.35)",
+                        backdropFilter: "blur(4px)",
+                        border: "none",
+                        borderRadius: "50%",
+                        color: "#fff",
+                        cursor: "pointer",
+                        display: "grid",
+                        height: 24,
+                        placeItems: "center",
+                        position: "absolute",
+                        right: 8,
+                        top: 8,
+                        transition: "all 150ms ease",
+                        width: 24,
+                      }}
+                      type="button"
+                    >
+                      {isSelected && <Check size={13} />}
+                    </button>
+                  </div>
+
+                  {/* Content area */}
+                  <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 6, padding: "10px 12px 12px" }}>
+                    <strong style={{
+                      fontSize: 13,
+                      lineHeight: 1.4,
+                      overflow: "hidden",
+                      display: "-webkit-box",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 1,
+                      textOverflow: "ellipsis",
+                    }}>{asset.name}</strong>
+
+                    <p style={{
+                      color: "var(--muted, #888)",
+                      display: "-webkit-box",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      margin: 0,
+                      minHeight: 36,
+                      overflow: "hidden",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 2,
+                    }}>
+                      {asset.visualDescription || asset.alt || "暂无描述"}
+                    </p>
+
+                    {(asset.tags ?? []).length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {asset.tags.slice(0, 3).map(tag => (
+                          <span key={tag} style={{
+                            background: "var(--accent-soft, #ebf4ff)",
+                            borderRadius: 4,
+                            color: "var(--accent, #5b8def)",
+                            fontSize: 10,
+                            fontWeight: 500,
+                            padding: "2px 6px",
+                          }}>{tag}</span>
+                        ))}
+                        {(asset.tags?.length ?? 0) > 3 && (
+                          <span style={{ color: "var(--muted, #888)", fontSize: 10 }}>+{asset.tags.length - 3}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Action bar at bottom */}
+                    <div style={{
+                      alignItems: "center",
+                      borderTop: "1px solid var(--border, #eee)",
+                      display: "flex",
+                      gap: 4,
+                      justifyContent: "flex-end",
+                      marginTop: "auto",
+                      paddingTop: 8,
+                    }}>
+                      <button
+                        aria-label={`编辑 ${asset.name}`}
+                        onClick={(e) => { e.stopPropagation(); setSelected(asset); setForm(toForm(asset)); }}
+                        style={{
+                          alignItems: "center",
+                          background: "var(--surface-muted, #f5f5f5)",
+                          border: "none",
+                          borderRadius: 6,
+                          color: "var(--ink)",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: 11,
+                          gap: 4,
+                          padding: "5px 10px",
+                          transition: "background 150ms ease",
+                        }}
+                        type="button"
+                      >
+                        <Pencil size={12} /> 编辑
+                      </button>
+                      <button
+                        aria-label={`复制 ${asset.name} Markdown`}
+                        onClick={(e) => { e.stopPropagation(); void copyMarkdown(asset); }}
+                        style={{
+                          alignItems: "center",
+                          background: "var(--surface-muted, #f5f5f5)",
+                          border: "none",
+                          borderRadius: 6,
+                          color: "var(--ink)",
+                          cursor: "pointer",
+                          display: "grid",
+                          height: 26,
+                          placeItems: "center",
+                          width: 26,
+                        }}
+                        type="button"
+                      >
+                        {copiedId === asset.id ? <Check size={13} color="var(--success, #48bb78)" /> : <Copy size={13} />}
+                      </button>
+                      <button
+                        aria-label={`删除 ${asset.name}`}
+                        onClick={(e) => { e.stopPropagation(); void remove(asset.id); }}
+                        style={{
+                          alignItems: "center",
+                          background: "var(--surface-muted, #f5f5f5)",
+                          border: "none",
+                          borderRadius: 6,
+                          color: "var(--muted, #888)",
+                          cursor: "pointer",
+                          display: "grid",
+                          height: 26,
+                          placeItems: "center",
+                          width: 26,
+                        }}
+                        type="button"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                </figure>
+              );
+            })}
           </div>
         )}
 
         {selected && (
-          <aside aria-label="素材详情编辑" className="panel" style={{ display: "grid", gap: 10, height: "fit-content" }}>
-            <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-              <h2 style={{ fontSize: 16, margin: 0 }}>素材详情</h2>
-              <button aria-label="关闭素材详情" className="icon-button" onClick={() => setSelected(null)} type="button">
+          <aside aria-label="素材详情编辑" style={{
+            background: "var(--surface, #fff)",
+            border: "1px solid var(--border, #e5e5e5)",
+            borderRadius: 12,
+            display: "grid",
+            gap: 0,
+            height: "fit-content",
+            overflow: "hidden",
+            position: "sticky",
+            top: 20,
+          }}>
+            {/* Header with image */}
+            <div style={{ position: "relative" }}>
+              <img alt="" src={selected.source} style={{ maxHeight: 200, objectFit: "cover", width: "100%" }} />
+              <button
+                aria-label="关闭素材详情"
+                onClick={() => setSelected(null)}
+                style={{
+                  alignItems: "center",
+                  background: "rgba(0,0,0,0.4)",
+                  backdropFilter: "blur(4px)",
+                  border: "none",
+                  borderRadius: "50%",
+                  color: "#fff",
+                  cursor: "pointer",
+                  display: "grid",
+                  height: 28,
+                  placeItems: "center",
+                  position: "absolute",
+                  right: 10,
+                  top: 10,
+                  width: 28,
+                }}
+                type="button"
+              >
                 <X size={15} />
               </button>
             </div>
-            <img alt="" src={selected.source} style={{ borderRadius: 8, maxHeight: 180, objectFit: "cover", width: "100%" }} />
-            <label className="field"><span>名称</span>
-              <input onChange={(event) => setForm({ ...form, name: event.target.value })} value={form.name} />
-            </label>
-            <label className="field"><span>短描述 / alt</span>
-              <input onChange={(event) => setForm({ ...form, alt: event.target.value })} value={form.alt} />
-            </label>
-            <label className="field"><span>视觉描述</span>
-              <textarea
-                onChange={(event) => setForm({ ...form, visualDescription: event.target.value })}
-                placeholder="主体、构图、色彩、风格，用于素材匹配"
-                rows={4}
-                value={form.visualDescription}
-              />
-            </label>
-            <label className="field"><span>使用场景</span>
-              <input
-                onChange={(event) => setForm({ ...form, usageHint: event.target.value })}
-                placeholder="例如：产品架构节 / 对比场景"
-                value={form.usageHint}
-              />
-            </label>
-            <label className="field"><span>生图提示词</span>
-              <textarea
-                onChange={(event) => setForm({ ...form, generationPrompt: event.target.value })}
-                rows={4}
-                value={form.generationPrompt}
-              />
-            </label>
-            <label className="field"><span>标签（逗号分隔）</span>
-              <input
-                onChange={(event) => setForm({ ...form, tagsText: event.target.value })}
-                value={form.tagsText}
-              />
-            </label>
-            <small className="muted">描述来源：{selected.descriptionSource || "manual"}</small>
-            <button className="button button--primary" disabled={saving} onClick={() => void saveDetails()} type="button">
-              {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
-              {saving ? "保存中" : "保存素材"}
-            </button>
+
+            {/* Form */}
+            <div style={{ display: "grid", gap: 14, padding: 16 }}>
+              <h2 style={{ fontSize: 15, margin: 0 }}>
+                {selected.origin === "generated" ? "AI 生成素材" : "上传素材"}
+              </h2>
+              <label style={{ color: "var(--ink)", display: "grid", fontSize: 12, fontWeight: 500, gap: 4 }}>
+                名称
+                <input onChange={(event) => setForm({ ...form, name: event.target.value })} style={{ borderRadius: 8, border: "1px solid var(--border, #ddd)", fontSize: 13, padding: "8px 10px" }} value={form.name} />
+              </label>
+              <label style={{ color: "var(--ink)", display: "grid", fontSize: 12, fontWeight: 500, gap: 4 }}>
+                短描述 / alt
+                <input onChange={(event) => setForm({ ...form, alt: event.target.value })} style={{ borderRadius: 8, border: "1px solid var(--border, #ddd)", fontSize: 13, padding: "8px 10px" }} value={form.alt} />
+              </label>
+              <label style={{ color: "var(--ink)", display: "grid", fontSize: 12, fontWeight: 500, gap: 4 }}>
+                视觉描述
+                <textarea
+                  onChange={(event) => setForm({ ...form, visualDescription: event.target.value })}
+                  placeholder="主体、构图、色彩、风格，用于素材匹配"
+                  rows={4}
+                  style={{ borderRadius: 8, border: "1px solid var(--border, #ddd)", fontSize: 13, lineHeight: 1.5, padding: "8px 10px", resize: "vertical" }}
+                  value={form.visualDescription}
+                />
+              </label>
+              <label style={{ color: "var(--ink)", display: "grid", fontSize: 12, fontWeight: 500, gap: 4 }}>
+                使用场景
+                <input
+                  onChange={(event) => setForm({ ...form, usageHint: event.target.value })}
+                  placeholder="例如：产品架构节 / 对比场景"
+                  style={{ borderRadius: 8, border: "1px solid var(--border, #ddd)", fontSize: 13, padding: "8px 10px" }}
+                  value={form.usageHint}
+                />
+              </label>
+              <label style={{ color: "var(--ink)", display: "grid", fontSize: 12, fontWeight: 500, gap: 4 }}>
+                生图提示词
+                <textarea
+                  onChange={(event) => setForm({ ...form, generationPrompt: event.target.value })}
+                  rows={4}
+                  style={{ borderRadius: 8, border: "1px solid var(--border, #ddd)", fontSize: 13, lineHeight: 1.5, padding: "8px 10px", resize: "vertical" }}
+                  value={form.generationPrompt}
+                />
+              </label>
+              <label style={{ color: "var(--ink)", display: "grid", fontSize: 12, fontWeight: 500, gap: 4 }}>
+                标签（逗号分隔）
+                <input onChange={(event) => setForm({ ...form, tagsText: event.target.value })} style={{ borderRadius: 8, border: "1px solid var(--border, #ddd)", fontSize: 13, padding: "8px 10px" }} value={form.tagsText} />
+              </label>
+              <div style={{ alignItems: "center", color: "var(--muted, #888)", display: "flex", fontSize: 11, gap: 6 }}>
+                <span>来源：{selected.descriptionSource || "manual"}</span>
+              </div>
+              <button
+                className="button button--primary"
+                disabled={saving}
+                onClick={() => void saveDetails()}
+                style={{ alignItems: "center", display: "flex", fontSize: 14, gap: 6, justifyContent: "center", padding: "10px 16px" }}
+                type="button"
+              >
+                {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
+                {saving ? "保存中" : "保存素材"}
+              </button>
+            </div>
           </aside>
         )}
       </div>

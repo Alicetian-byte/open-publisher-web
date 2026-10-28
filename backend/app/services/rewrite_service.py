@@ -35,10 +35,14 @@ class RewriteService:
     def start_rewrite(self, *, article_id: str, markdown: str, instruction: str,
                       selected_texts: list[str],
                       conversation: list[dict] | None = None,
-                      owner_user_id: str | None = None) -> dict:
+                      owner_user_id: str | None = None,
+                      input_images: list[str] | None = None) -> dict:
         if not instruction.strip():
             raise ValueError("修改要求不能为空")
         targets = [t for t in selected_texts if t.strip()] or [markdown]
+        images = [str(item).strip() for item in (input_images or []) if str(item).strip()]
+        if images and not getattr(self.llm, "capabilities", {}).get("vision"):
+            raise ValueError("当前模型档案未开启图片理解能力。")
         run = self.journal.create_run(
             article_id=article_id, agent_id="writer", operation="rewrite_candidate",
             session_id=f"rewrite:{article_id}"[:36], owner_user_id=owner_user_id,
@@ -47,7 +51,7 @@ class RewriteService:
             target=self._execute_in_own_session,
             args=(run["id"],),
             kwargs=dict(markdown=markdown, instruction=instruction, targets=targets,
-                        conversation=conversation or []),
+                        conversation=conversation or [], images=images),
             daemon=True,
         )
         thread.start()
@@ -60,7 +64,8 @@ class RewriteService:
             worker._execute(run_id, **kwargs)
 
     def _execute(self, run_id: str, *, markdown: str, instruction: str,
-                 targets: list[str], conversation: list[dict]) -> None:
+                 targets: list[str], conversation: list[dict],
+                 images: list[str] | None = None) -> None:
         journal = RunJournal(self.db)
         try:
             journal.transition(run_id, "running")
@@ -83,7 +88,10 @@ class RewriteService:
                     for i, t in enumerate(targets)
                 ),
             ]))
-            data = self.llm.complete_json(_SYSTEM, user_prompt, temperature=0.5)
+            data = self.llm.complete_json(
+                _SYSTEM, user_prompt, temperature=0.5,
+                images=[item for item in (images or []) if item],
+            )
             replacements = data.get("replacements")
             if not isinstance(replacements, list) or not replacements:
                 raise RuntimeError("模型没有返回 replacements")

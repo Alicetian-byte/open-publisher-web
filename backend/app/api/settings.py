@@ -538,6 +538,67 @@ def save_integrations(body: IntegrationSettings, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="发布桥需为可信 Host 的 HTTP(S) 地址，不允许凭据或查询参数")
     return write_preferences(db, "integrations", {**body.model_dump(), "trustedHosts":hosts})
 
+class WeChatCredentialsPayload(BaseModel):
+    """微信公众号发布凭据（appid + appsecret），Fernet 加密入库。"""
+    appId: str = Field(min_length=1, max_length=64)
+    appSecret: str = Field(min_length=1, max_length=128)
+
+
+def _wechat_key_status(db: Session) -> dict:
+    from app.services.wechat_publisher import load_credentials
+    creds = load_credentials(db)
+    from app.services import secret_store
+    meta = secret_store.get_secret_meta(db, "wechat:global")
+    return {
+        "configured": creds.configured,
+        "appId": creds.app_id if creds.configured else "",
+        "keyHint": (meta or {}).get("keyHint", ""),
+        "keyVersion": (meta or {}).get("keyVersion", 0),
+    }
+
+
+@router.get("/wechat")
+def get_wechat_credentials(db: Session = Depends(get_db)):
+    """读取微信公众号发布凭据状态（不回显 appsecret 明文）。"""
+    return _wechat_key_status(db)
+
+
+@router.put("/wechat", dependencies=[Depends(require_admin)])
+def save_wechat_credentials(body: WeChatCredentialsPayload, db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    from app.services.wechat_publisher import save_credentials
+    save_credentials(db, app_id=body.appId, app_secret=body.appSecret, actor=user.id)
+    return _wechat_key_status(db)
+
+
+@router.delete("/wechat", dependencies=[Depends(require_admin)])
+def delete_wechat_credentials(db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
+    from app.services.wechat_publisher import clear_credentials
+    clear_credentials(db, actor=user.id)
+    return _wechat_key_status(db)
+
+
+@router.post("/wechat/test", dependencies=[Depends(require_admin)])
+def test_wechat_credentials(db: Session = Depends(get_db)):
+    """用当前凭据获取 access_token，验证连通性。"""
+    from app.services.wechat_publisher import load_credentials, WECHAT_API_BASE
+    import httpx as _httpx
+    creds = load_credentials(db)
+    if not creds.configured:
+        raise HTTPException(status_code=501, detail="微信公众号凭据未配置")
+    try:
+        res = _httpx.get(
+            f"{WECHAT_API_BASE}/token",
+            params={"grant_type": "client_credential", "appid": creds.app_id, "secret": creds.app_secret},
+            timeout=15,
+        )
+        data = res.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"微信 API 调用失败：{exc}") from None
+    if "access_token" not in data:
+        return {"ok": False, "errcode": data.get("errcode"), "errmsg": data.get("errmsg")}
+    return {"ok": True, "appId": creds.app_id}
+
+
 @router.put("/integrations/{kind}/key", dependencies=[Depends(require_admin)])
 def set_integration_key(kind: Literal["tavily", "github"], body: KeyPayload, db: Session = Depends(get_db), user: AppUser = Depends(require_user)):
     secret_store.set_secret(db, "integration:" + kind, body.apiKey.strip(), actor=user.id)

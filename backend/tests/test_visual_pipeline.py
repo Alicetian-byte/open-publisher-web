@@ -56,6 +56,17 @@ def client(factory):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def prevent_visual_planner_network(monkeypatch):
+    """单测不允许依赖真实模型；需要模型规划用例会再次覆写此类。"""
+    from app.agents import llm_client
+
+    class NoKeyLLM:
+        api_key_configured = False
+
+    monkeypatch.setattr(llm_client, "LLMClient", NoKeyLLM)
+
+
 @pytest.fixture()
 def article(factory):
     with factory() as db:
@@ -104,6 +115,54 @@ def test_plan_without_assets_all_generate(factory, article):
         plan = VisualService(db).plan(markdown=MARKDOWN, target_count=3)
     assert plan["targetCount"] == 3
     assert all(p["source"] == "generate" for p in plan["placements"])
+
+
+def test_plan_uses_model_and_falls_back(factory, article, monkeypatch):
+    from app.agents import llm_client
+
+    class FakeLLM:
+        model = "planner-model"
+        api_key_configured = True
+
+        @staticmethod
+        def complete_json(*args, **kwargs):
+            return {
+                "placements": [
+                    {
+                        "anchorHeading": "数据对比",
+                        "anchorExcerpt": "导出速度差异",
+                        "purpose": "说明性能差异",
+                        "visualType": "comparison",
+                        "source": "generate",
+                        "assetId": None,
+                        "selectionReason": "对比图最直观。",
+                        "alt": "导出速度对比",
+                        "generationPrompt": "简洁左右对比示意图，无文字。",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(llm_client, "LLMClient", FakeLLM)
+    with factory() as db:
+        plan = VisualService(db).plan(markdown=MARKDOWN, target_count=1)
+    assert plan["planner"] == "model"
+    assert plan["plannerModel"] == "planner-model"
+    assert plan["placements"][0]["anchorHeading"] == "数据对比"
+    assert plan["placements"][0]["visualType"] == "comparison"
+
+    class BadLLM:
+        model = "bad-model"
+        api_key_configured = True
+
+        @staticmethod
+        def complete_json(*args, **kwargs):
+            raise RuntimeError("upstream unavailable")
+
+    monkeypatch.setattr(llm_client, "LLMClient", BadLLM)
+    with factory() as db:
+        plan = VisualService(db).plan(markdown=MARKDOWN, target_count=1)
+    assert plan["planner"] == "deterministic"
+    assert len(plan["placements"]) == 1
 
 
 def test_apply_inserts_assets_and_commits_revision(factory, article):

@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
-import { LoaderCircle, Sparkles } from "lucide-react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { Eye, LoaderCircle, Pencil, Sparkles } from "lucide-react";
 import { api } from "../../api/client";
 
 interface VisualPlanPlacement {
@@ -79,6 +79,17 @@ interface VisualPlanContextValue {
   consumeCompleted: () => void;
 }
 
+const STYLE_PRESETS = [
+  { id: "default", label: "默认（手绘扁平）", suffix: "" },
+  { id: "minimal", label: "极简线条", suffix: "极简线条风格、大量留白、单色或双色，画面干净克制。" },
+  { id: "watercolor", label: "水彩插画", suffix: "水彩插画风格、柔和色彩、自然过渡，画面温暖。" },
+  { id: "3d", label: "3D 渲染", suffix: "3D 等距渲染风格、柔和光影、圆角几何，现代感。" },
+  { id: "photo", label: "摄影写实", suffix: "真实摄影风格、自然光、浅景深，画面逼真。" },
+  { id: "flat", label: "扁平几何", suffix: "扁平几何风格、色块构成、极简配色，现代设计感。" },
+] as const;
+
+interface ImageModelOption { id: string; name: string; model: string }
+
 const VisualPlanContext = createContext<VisualPlanContextValue | null>(null);
 
 function useVisualPlanContext(): VisualPlanContextValue {
@@ -95,6 +106,25 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
   const [excludedIds, setExcludedIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [promptEdits, setPromptEdits] = useState<Record<string, string>>({});
+  const [styleSelections, setStyleSelections] = useState<Record<string, string>>({});
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [editingPrompts, setEditingPrompts] = useState<Record<string, boolean>>({});
+  const [imageModels, setImageModels] = useState<ImageModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [targetCount, setTargetCount] = useState(2);
+
+  // 加载可选生图模型列表
+  useEffect(() => {
+    api.get<{ models: ImageModelOption[] }>("/settings/image-models")
+      .then((res) => {
+        const models = res.data.models ?? [];
+        setImageModels(models);
+        if (models.length > 0) setSelectedModel(models[0].id);
+      })
+      .catch(() => setImageModels([]));
+  }, []);
 
   const startPlan = async (articleId: string, options: StartVisualPlanOptions = {}) => {
     if (busy) return;
@@ -105,7 +135,7 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
       const res = await api.post<VisualPlanSummary>(
         `/articles/${articleId}/visual-plan`,
         {
-          targetCount: options.targetCount ?? 2,
+          targetCount: options.targetCount ?? targetCount,
           assetIds: options.assetIds ?? [],
         },
       );
@@ -136,12 +166,77 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
     setError(null);
   };
 
+  const getEffectivePrompt = (placementId: string, originalPrompt: string) => {
+    const edited = promptEdits[placementId];
+    const style = STYLE_PRESETS.find((s) => s.id === (styleSelections[placementId] ?? "default"));
+    let prompt = edited ?? originalPrompt;
+    if (style && style.suffix && !prompt.includes(style.suffix)) {
+      prompt = prompt.replace(/风格：.*?(?=。|$)/, `风格：${style.suffix}`);
+      if (prompt.includes(style.suffix)) return prompt;
+      prompt = `${prompt} 风格：${style.suffix}`;
+    }
+    return prompt;
+  };
+
+  const updatePrompt = (placementId: string, value: string) => {
+    setPromptEdits((current) => ({ ...current, [placementId]: value }));
+  };
+
+  const togglePromptEdit = (placementId: string) => {
+    setEditingPrompts((current) => ({ ...current, [placementId]: !current[placementId] }));
+  };
+
+  const updateStyle = (placementId: string, styleId: string) => {
+    setStyleSelections((current) => ({ ...current, [placementId]: styleId }));
+  };
+
+  const generatePreview = async (placementId: string, originalPrompt: string) => {
+    if (previewing) return;
+    setPreviewing(placementId);
+    const prompt = getEffectivePrompt(placementId, originalPrompt);
+    try {
+      const res = await api.post<{ source: string }>("/media/preview", {
+        prompt: prompt.slice(0, 2000),
+        size: "1024x1024",
+        imageModelId: selectedModel || undefined,
+      });
+      setPreviews((current) => ({ ...current, [placementId]: res.data.source }));
+    } catch {
+      setError("预览生成失败，请检查生图模型配置。");
+    } finally {
+      setPreviewing(null);
+    }
+  };
+
   const togglePlacement = (placementId: string) => {
     setExcludedIds((current) =>
       current.includes(placementId)
         ? current.filter((id) => id !== placementId)
         : [...current, placementId],
     );
+  };
+
+  const replan = async (count: number) => {
+    if (!job || busy) return;
+    setTargetCount(count);
+    setBusy(true);
+    setError(null);
+    setExcludedIds([]);
+    try {
+      const res = await api.post<VisualPlanSummary>(
+        `/articles/${job.articleId}/visual-plan`,
+        { targetCount: count, assetIds: [] },
+      );
+      if (res.data.placements.length === 0) {
+        setError("视觉规划认为本文不需要配图。");
+        return;
+      }
+      setJob({ ...job, plan: res.data });
+    } catch {
+      setError("重新规划失败，请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const closePlan = () => {
@@ -156,7 +251,10 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
     if (!current || busy) return;
     const placements = current.plan.placements.filter(
       (placement) => !excludedIds.includes(placement.id),
-    );
+    ).map((placement) => ({
+      ...placement,
+      generationPrompt: getEffectivePrompt(placement.id, placement.generationPrompt),
+    }));
     if (!placements.length) {
       setError("请至少保留一张配图，或关闭方案。");
       return;
@@ -181,7 +279,7 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
           baseRevisionId: snapshot.revisionId,
           baseContentHash: snapshot.contentHash,
           placements,
-          imageModelId: current.plan.imageModelId || null,
+          imageModelId: selectedModel || null,
         },
       );
       if (!res.data.insertedCount) {
@@ -234,12 +332,20 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
             className="creation-picker__dialog"
             onClick={(event) => event.stopPropagation()}
             role="dialog"
-            style={{ maxWidth: 560, width: "min(560px, 100%)" }}
+            style={{ maxWidth: 600, width: "min(600px, 100%)" }}
           >
-            <header style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-              <div>
-                <span className="page-kicker">智能配图</span>
-                <h2>{job ? `确认配图方案（${job.plan.placements.length} 张）` : "正在规划配图"}</h2>
+            <header style={{ alignItems: "center", display: "flex", justifyContent: "space-between", paddingBottom: 14, borderBottom: "1px solid var(--border, #eee)" }}>
+              <div style={{ alignItems: "center", display: "flex", gap: 10 }}>
+                <div style={{
+                  alignItems: "center", background: "linear-gradient(135deg, var(--accent, #5b8def), color-mix(in srgb, var(--accent, #5b8def) 60%, #9b59b6))",
+                  borderRadius: 10, color: "#fff", display: "grid", height: 38, placeItems: "center", width: 38,
+                }}>
+                  <Sparkles size={18} />
+                </div>
+                <div>
+                  <span style={{ color: "var(--accent, #5b8def)", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase" }}>智能配图</span>
+                  <h2 style={{ fontSize: 17, margin: 0 }}>{job ? `确认配图方案（${job.plan.placements.length} 张）` : "正在规划配图"}</h2>
+                </div>
               </div>
               <button
                 aria-label="关闭配图方案"
@@ -252,59 +358,208 @@ export function VisualPlanProvider({ children }: { children: ReactNode }) {
               </button>
             </header>
             {busy && (
-              <p className="muted" style={{ alignItems: "center", display: "flex", gap: 8 }}>
-                <LoaderCircle className="spin" size={15} />
-                {job ? "正在生成并插入配图，可停留在当前页面等待；切换页面后进度不会丢失。" : "正在分析正文并规划配图，切换页面后进度不会丢失。"}
-              </p>
+              <div style={{
+                alignItems: "center", display: "flex", gap: 10, marginTop: 4, padding: "12px 14px",
+                border: "1px solid color-mix(in srgb, var(--accent, #5b8def) 18%, transparent)",
+                borderRadius: 10, background: "color-mix(in srgb, var(--accent, #5b8def) 6%, transparent)",
+              }}>
+                <LoaderCircle className="spin" size={18} style={{ color: "var(--accent, #5b8def)", flexShrink: 0 }} />
+                <div>
+                  <div style={{ color: "var(--ink)", fontSize: 13, fontWeight: 600 }}>
+                    {job ? "正在生成配图" : "正在规划配图"}
+                  </div>
+                  <div style={{ color: "var(--muted, #999)", fontSize: 12, marginTop: 2 }}>
+                    {job ? "生成图片并插入正文，切换页面后进度不会丢失。" : "分析正文内容，匹配合适的插图位置，切换页面后进度不会丢失。"}
+                  </div>
+                </div>
+              </div>
             )}
             {error && (
               <div className="workflow-task__failure" role="alert" style={{ marginTop: 10 }}>
                 <p>{error}</p>
               </div>
             )}
-            <p className="muted">
+            <p style={{ color: "var(--muted, #888)", fontSize: 12, lineHeight: 1.5, marginTop: 10 }}>
               素材库图片按匹配度自动选用；未达到阈值的位置将调用生图模型生成新图。
             </p>
-            <ol style={{ display: "grid", gap: 10, marginTop: 12 }}>
-              {job?.plan.placements.map((placement) => (
-                <li
-                  key={placement.id}
-                  style={{ border: "1px solid var(--border, #ddd)", borderRadius: 12, padding: "10px 14px" }}
+            {imageModels.length > 0 && (
+              <div style={{
+                alignItems: "center", display: "flex", gap: 8, marginTop: 10, padding: "8px 10px",
+                background: "var(--surface-muted, #f5f5f5)", borderRadius: 8,
+              }}>
+                <small style={{ color: "var(--muted, #888)", flexShrink: 0, fontSize: 11 }}>生图模型</small>
+                <select
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  style={{ background: "var(--surface, #fff)", border: "1px solid var(--border, #ddd)", borderRadius: 6, flex: 1, fontSize: 12, minWidth: 0, padding: "5px 8px" }}
+                  value={selectedModel}
                 >
-                  <strong>{placement.anchorHeading ?? "文章正文"}</strong>
-                  <span className="field-tag" style={{ marginLeft: 8 }}>
-                    {placement.source === "existing_asset" ? "使用素材库" : "AI 生成"}
-                  </span>
-                  <small style={{ display: "block", marginTop: 4 }}>
-                    {placement.selectionReason}｜alt：{placement.alt}
-                  </small>
-                  <div style={{ alignItems: "center", display: "flex", gap: 8, marginTop: 8 }}>
-                    <button
-                      className="button button--quiet"
-                      disabled={busy}
-                      onClick={() => togglePlacement(placement.id)}
-                      type="button"
-                    >
-                      {excludedIds.includes(placement.id) ? "保留这张" : "不插入这张"}
-                    </button>
-                    {excludedIds.includes(placement.id) && (
-                      <small className="muted">确认应用时会跳过此位置。</small>
+                  {imageModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                <button
+                  className="button button--quiet"
+                  onClick={() => window.open("http://localhost:5174", "_blank")}
+                  style={{ fontSize: 11, flexShrink: 0, padding: "3px 8px" }}
+                  title="在管理端添加生图模型"
+                  type="button"
+                >
+                  + 添加
+                </button>
+              </div>
+            )}
+            {imageModels.length === 0 && (
+              <div style={{
+                alignItems: "center", display: "flex", gap: 8, marginTop: 10, padding: "8px 10px",
+                background: "var(--warning-soft, #fff3cd)", borderRadius: 8, border: "1px solid var(--warning, #ffc107)",
+              }}>
+                <small style={{ color: "var(--warning, #856404)", fontSize: 11 }}>
+                  未配置生图模型，请到管理端添加。
+                </small>
+              </div>
+            )}
+            <div style={{
+              alignItems: "center", display: "flex", gap: 8, marginTop: 10, padding: "8px 10px",
+              background: "var(--surface-muted, #f5f5f5)", borderRadius: 8,
+            }}>
+              <small style={{ color: "var(--muted, #888)", flexShrink: 0, fontSize: 11 }}>配图数量</small>
+              <div style={{ display: "flex", gap: 4 }}>
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <button
+                    key={n}
+                    disabled={busy}
+                    onClick={() => void replan(n)}
+                    style={{
+                      alignItems: "center", background: n === targetCount ? "var(--accent, #5b8def)" : "var(--surface, #fff)",
+                      border: `1px solid ${n === targetCount ? "var(--accent, #5b8def)" : "var(--border, #ddd)"}`,
+                      borderRadius: 6, color: n === targetCount ? "#fff" : "var(--ink)", cursor: "pointer",
+                      display: "grid", fontSize: 12, fontWeight: 600, height: 28, placeItems: "center", width: 28,
+                    }}
+                    type="button"
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ol style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              {job?.plan.placements.map((placement) => {
+                const isExcluded = excludedIds.includes(placement.id);
+                const isEditing = editingPrompts[placement.id];
+                const effectivePrompt = getEffectivePrompt(placement.id, placement.generationPrompt);
+                const previewSrc = previews[placement.id];
+                const isPreviewing = previewing === placement.id;
+                return (
+                  <li
+                    key={placement.id}
+                    style={{
+                      border: `1px solid ${isExcluded ? "var(--border, #ddd)" : "color-mix(in srgb, var(--accent, #5b8def) 30%, transparent)"}`,
+                      borderRadius: 12, padding: "12px 14px",
+                      opacity: isExcluded ? 0.5 : 1,
+                      background: isExcluded ? "var(--surface-muted, #fafafa)" : "color-mix(in srgb, var(--accent, #5b8def) 3%, transparent)",
+                      transition: "all 200ms ease",
+                    }}
+                  >
+                    <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
+                      <strong style={{ flex: 1, minWidth: 0 }}>{placement.anchorHeading ?? "文章正文"}</strong>
+                      <span className="field-tag">
+                        {placement.source === "existing_asset" ? "使用素材库" : "AI 生成"}
+                      </span>
+                    </div>
+                    <small style={{ display: "block", marginTop: 4 }}>
+                      {placement.selectionReason}｜alt：{placement.alt}
+                    </small>
+
+                    {/* 风格选择 + 提示词编辑 + 预览按钮 */}
+                    {placement.source === "generate" && !isExcluded && (
+                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                        <div style={{ alignItems: "center", display: "flex", gap: 6 }}>
+                          <small className="muted" style={{ flexShrink: 0 }}>风格</small>
+                          <select
+                            onChange={(e) => updateStyle(placement.id, e.target.value)}
+                            style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "4px 6px" }}
+                            value={styleSelections[placement.id] ?? "default"}
+                          >
+                            {STYLE_PRESETS.map((s) => (
+                              <option key={s.id} value={s.id}>{s.label}</option>
+                            ))}
+                          </select>
+                          <button
+                            aria-label={isEditing ? "收起提示词" : "编辑提示词"}
+                            className="button button--quiet"
+                            disabled={busy}
+                            onClick={() => togglePromptEdit(placement.id)}
+                            style={{ padding: "4px 8px" }}
+                            title={isEditing ? "收起提示词" : "编辑提示词"}
+                            type="button"
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            className="button button--quiet"
+                            disabled={busy || isPreviewing}
+                            onClick={() => void generatePreview(placement.id, placement.generationPrompt)}
+                            style={{ alignItems: "center", display: "flex", gap: 4, padding: "4px 8px" }}
+                            type="button"
+                          >
+                            {isPreviewing ? <LoaderCircle className="spin" size={13} /> : <Eye size={13} />}
+                            {isPreviewing ? "生成中…" : "预览"}
+                          </button>
+                        </div>
+
+                        {isEditing && (
+                          <textarea
+                            onChange={(e) => updatePrompt(placement.id, e.target.value)}
+                            placeholder="输入生图提示词…"
+                            rows={3}
+                            style={{ fontSize: 12, lineHeight: 1.5, padding: "6px 8px", resize: "vertical", width: "100%" }}
+                            value={promptEdits[placement.id] ?? placement.generationPrompt}
+                          />
+                        )}
+
+                        {!isEditing && (
+                          <small className="muted" style={{ cursor: "pointer", display: "-webkit-box", overflow: "hidden", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, fontSize: 11 }} onClick={() => togglePromptEdit(placement.id)}>
+                            {effectivePrompt}
+                          </small>
+                        )}
+
+                        {previewSrc && (
+                          <img
+                            alt={`预览：${placement.alt}`}
+                            src={previewSrc}
+                            style={{ borderRadius: 8, maxHeight: 200, objectFit: "cover", width: "100%" }}
+                          />
+                        )}
+                      </div>
                     )}
-                  </div>
-                </li>
-              ))}
+
+                    <div style={{ alignItems: "center", display: "flex", gap: 8, marginTop: 8 }}>
+                      <button
+                        className="button button--quiet"
+                        disabled={busy}
+                        onClick={() => togglePlacement(placement.id)}
+                        type="button"
+                      >
+                        {isExcluded ? "保留这张" : "不插入这张"}
+                      </button>
+                      {isExcluded && <small className="muted">确认应用时会跳过此位置。</small>}
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
-            <footer style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
-              <button className="button button--quiet" disabled={busy} onClick={job ? closePlan : undefined} type="button">
+            <footer style={{ borderTop: "1px solid var(--border, #eee)", display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14, paddingTop: 14 }}>
+              <button className="button button--quiet" disabled={busy} onClick={job ? closePlan : undefined} style={{ padding: "8px 18px" }} type="button">
                 取消
               </button>
               <button
                 className="button button--primary"
                 disabled={busy}
                 onClick={() => void confirmApply()}
+                style={{ alignItems: "center", background: "linear-gradient(135deg, var(--accent, #5b8def), color-mix(in srgb, var(--accent, #5b8def) 70%, #9b59b6))", border: "none", display: "flex", gap: 6, padding: "8px 18px" }}
                 type="button"
               >
-                {busy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
+                {busy ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
                 {job ? "确认并插入配图" : "规划中…"}
               </button>
             </footer>

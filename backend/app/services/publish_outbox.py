@@ -74,7 +74,21 @@ class DryRunDelivery:
 class PublishOutboxService:
     def __init__(self, db: Session, delivery: DryRunDelivery | None = None):
         self.db = db
-        self.delivery = delivery or DryRunDelivery()
+        self._dry_run_delivery = delivery or DryRunDelivery()
+        self._wechat_delivery: "WeChatOfficialDelivery | None" = None
+
+    @property
+    def delivery(self):
+        """按当前 job 的 operation 分发到对应的 delivery 后端。"""
+        return self._dry_run_delivery  # kept for backward compat; process() dispatches explicitly
+
+    def _delivery_for(self, mode: str):
+        if mode == "wechat_sync_draft":
+            if self._wechat_delivery is None:
+                from app.services.wechat_publisher import WeChatOfficialDelivery
+                self._wechat_delivery = WeChatOfficialDelivery(self.db)
+            return self._wechat_delivery
+        return self._dry_run_delivery
 
     # ---------- 查询 ----------
 
@@ -272,7 +286,8 @@ class PublishOutboxService:
         self.db.commit()
 
         try:
-            result = self.delivery.deliver(
+            delivery = self._delivery_for(job.operation)
+            result = delivery.deliver(
                 idempotency_key=job.idempotency_key, platform=job.platform,
                 account_ref=job.account_ref, title=variant.title,
                 markdown=variant.markdown, mode=job.operation,
@@ -330,7 +345,8 @@ class PublishOutboxService:
         ))
         self.db.commit()
 
-        result = self.delivery.reconcile(
+        delivery = self._delivery_for(job.operation)
+        result = delivery.reconcile(
             idempotency_key=job.idempotency_key, platform=job.platform, mode=job.operation,
         )
         completed_at = _now()

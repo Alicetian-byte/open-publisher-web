@@ -67,19 +67,26 @@ function AiConfigPage() {
   const [llmKeyInput, setLlmKeyInput] = useState("");
   const [imageKeyInput, setImageKeyInput] = useState("");
   const [profileKeyInputs, setProfileKeyInputs] = useState<Record<string, string>>({});
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [wechat, setWechat] = useState<{configured: boolean; appId: string; keyHint: string; keyVersion: number} | null>(null);
+  const [wechatForm, setWechatForm] = useState({appId: "", appSecret: ""});
+  const [showWechatForm, setShowWechatForm] = useState(false);
+  const [showDiscoveredModels, setShowDiscoveredModels] = useState(false);
   const { logout, user } = useAdminAuth();
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [statusRes, profilesRes, imageRes] = await Promise.all([
+      const [statusRes, profilesRes, imageRes, wechatRes] = await Promise.all([
         api.get<ModelStatus>("/settings/model"),
         api.get<{ profiles: ProfileOut[] }>("/settings/profiles"),
         api.get<ImageStatus>("/settings/image"),
+        api.get<{configured: boolean; appId: string; keyHint: string; keyVersion: number}>("/settings/wechat"),
       ]);
       setStatus(statusRes.data);
       setProfiles(profilesRes.data.profiles);
       setImage(imageRes.data);
+      setWechat(wechatRes.data);
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof detail === "string" ? detail : "无法读取 AI 配置。");
@@ -139,6 +146,29 @@ function AiConfigPage() {
       setMessage("档案已删除。");
     } catch {
       setError("删除失败。");
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
+    }
+  };
+
+  const discoverModels = async () => {
+    setBusy(true);
+    setBusyAction("discoverModels");
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await api.get<{ models: string[] }>("/settings/models", { timeout: 120000 });
+      setDiscoveredModels(res.data.models);
+      setShowDiscoveredModels(true);
+      setMessage(`已发现 ${res.data.models.length} 个模型。`);
+    } catch (err) {
+      if ((err as { code?: string })?.code === "ECONNABORTED") {
+        setError("模型发现请求超时（上游超过 120 秒未响应）。");
+        return;
+      }
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "模型列表拉取失败。");
     } finally {
       setBusy(false);
       setBusyAction(null);
@@ -355,6 +385,66 @@ function AiConfigPage() {
       setBusyAction(null);
     }
   };
+  const saveWechat = async () => {
+    if (!wechatForm.appId.trim() || !wechatForm.appSecret.trim()) {
+      setError("微信公众号 AppID / AppSecret 必填。");
+      return;
+    }
+    setBusy(true);
+    setBusyAction("saveWechat");
+    setError(null);
+    try {
+      await api.put("/settings/wechat", wechatForm);
+      setWechatForm({appId: "", appSecret: ""});
+      setShowWechatForm(false);
+      await load();
+      setMessage("微信公众号凭据已加密入库。");
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "微信凭据保存失败。");
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
+    }
+  };
+
+  const testWechat = async () => {
+    setBusy(true);
+    setBusyAction("testWechat");
+    setMessage(null);
+    setError(null);
+    try {
+      const res = await api.post<{ ok: boolean; appId?: string; errcode?: string; errmsg?: string }>("/settings/wechat/test", null, { timeout: 30000 });
+      if (res.data.ok) {
+        setMessage(`微信凭据有效：AppID ${res.data.appId}`);
+      } else {
+        setError(`微信 API 返回错误 [${res.data.errcode}]: ${res.data.errmsg}`);
+      }
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "微信连通测试失败。");
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
+    }
+  };
+
+  const clearWechat = async () => {
+    setBusy(true);
+    setBusyAction("clearWechat");
+    setError(null);
+    try {
+      await api.delete("/settings/wechat");
+      await load();
+      setMessage("微信公众号凭据已删除。");
+    } catch {
+      setError("微信凭据删除失败。");
+    } finally {
+      setBusy(false);
+      setBusyAction(null);
+    }
+  };
+
   return (
     <div className="admin-shell">
       <header>
@@ -375,6 +465,9 @@ function AiConfigPage() {
           <h2>当前生效配置</h2>
           <div>
             <button className="quiet" onClick={() => void load()} type="button"><RefreshCw size={14} /> 刷新</button>
+            <button className="quiet" disabled={busy} onClick={() => void discoverModels()} type="button">
+              {busyAction === "discoverModels" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} 发现模型
+            </button>
             <button className="primary" disabled={busy} onClick={() => void test()} type="button">
               {busyAction === "test" ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试连通
             </button>
@@ -389,6 +482,32 @@ function AiConfigPage() {
             <div><small>生效档案</small><strong>{status.profileName ?? "全局数据库密钥"}</strong></div>
             <div><small>超时</small><strong>{status.timeoutSeconds}s</strong></div>
           </div>
+          {showDiscoveredModels && (
+            <div className="admin-form" style={{ marginTop: 12 }}>
+              {discoveredModels.length === 0 ? (
+                <p className="muted">上游没有返回模型。</p>
+              ) : (
+                <div className="profile-list">
+                  {discoveredModels.map((model) => (
+                    <div className="profile-row" key={model}>
+                      <span className="mono">{model}</span>
+                      <button
+                        className="quiet"
+                        onClick={() => {
+                          setForm((current) => ({ ...current, modelId: model }));
+                          setShowForm(true);
+                          setMessage(`已选择 ${model}，确认 API Base URL 后保存档案。`);
+                        }}
+                        type="button"
+                      >
+                        填入档案
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="admin-form" style={{ marginTop: 12 }}>
             <input autoComplete="new-password" onChange={(e) => setLlmKeyInput(e.target.value)} placeholder="录入全局 LLM 密钥（加密入库，不回显）" type="password" value={llmKeyInput} />
             <button className="primary" disabled={busy} onClick={() => void saveLlmKey()} type="button">保存密钥</button>
@@ -501,6 +620,50 @@ function AiConfigPage() {
                 <input onChange={(e) => setImageForm({ ...imageForm, modelId: e.target.value })} placeholder="生图模型 ID，例如 gpt-image-1" required value={imageForm.modelId} />
                 <input min={1} onChange={(e) => setImageForm({ ...imageForm, timeoutSeconds: Number(e.target.value) || 180 })} placeholder="超时秒数" type="number" value={imageForm.timeoutSeconds} />
                 <button className="primary" disabled={busy} type="submit">保存生图配置</button>
+              </form>
+            )}
+          </>
+        ) : (
+          <p className="muted">加载中...</p>
+        )}
+      </section>
+
+      <section className="admin-card">
+        <div className="section-head">
+          <h2>微信公众号发布</h2>
+          <div>
+            <button className="quiet" onClick={() => void load()} type="button"><RefreshCw size={14} /> 刷新</button>
+            {wechat?.configured && <button className="primary" disabled={busy} onClick={() => void testWechat()} type="button">
+              {busyAction === "testWechat" ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />} 测试连通
+            </button>}
+          </div>
+        </div>
+        {wechat ? (
+          <>
+            <div className="config-grid">
+              <div><small>AppID</small><strong>{wechat.appId || "未配置"}</strong></div>
+              <div><small>AppSecret</small><strong>{wechat.configured ? `已配置（${wechat.keyHint}）` : "未配置"}</strong></div>
+              <div><small>发布模式</small><strong>草稿（需在微信后台手动发布）</strong></div>
+            </div>
+            <div className="section-head" style={{ marginTop: 12 }}>
+              <span className="muted">凭据经 Fernet 加密存入数据库；AppSecret 永不回显。</span>
+              <div>
+                <button className="quiet" onClick={() => setShowWechatForm(!showWechatForm)} type="button">
+                  {wechat.configured ? "更新凭据" : "配置凭据"}
+                </button>
+                {wechat.configured && <button className="danger" disabled={busy} onClick={() => void clearWechat()} type="button">删除凭据</button>}
+              </div>
+            </div>
+            {showWechatForm && (
+              <form
+                className="admin-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveWechat();
+                }}>
+                <input onChange={(e) => setWechatForm({ ...wechatForm, appId: e.target.value })} placeholder="微信公众号 AppID" required value={wechatForm.appId} />
+                <input autoComplete="new-password" onChange={(e) => setWechatForm({ ...wechatForm, appSecret: e.target.value })} placeholder="微信公众号 AppSecret（加密入库，不回显）" type="password" required value={wechatForm.appSecret} />
+                <button className="primary" disabled={busy} type="submit">保存微信凭据</button>
               </form>
             )}
           </>

@@ -19,7 +19,7 @@ import { PillSelect } from "../components/PillSelect";
 
 // 蓝本 CreatePage 的 Web 迁移（团队自有代码，1:1 结构与类名）。
 // 后端映射：POST /agent-runs/article-create（prompt/tone/lengthPreset/customLength）
-// + SSE /agent-runs/{id}/events；联网检索与视觉输入当前后端不支持，控件保留并明确标注。
+// + SSE /agent-runs/{id}/events；联网检索由后端 Tavily 工具支持，未配置 Key 时自动降级。
 
 type LengthPreset = "short" | "medium" | "long" | "custom";
 type Tone = "真人感" | "豆包投毒";
@@ -368,7 +368,7 @@ export default function CreatePage() {
               { id: "auto", label: "自动" },
               { id: "off", label: "关闭" },
             ]}
-            title="当前 Web 版后端暂未启用联网检索"
+            title="联网检索需要配置 Tavily Key；未配置时自动降级为本地写作"
             value={webSearchMode}
           />
           <button className="creation-toolbar__choice creation-toolbar__button" onClick={() => setPicker("image")} type="button">

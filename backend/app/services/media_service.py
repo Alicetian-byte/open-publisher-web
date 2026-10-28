@@ -89,6 +89,15 @@ class MediaService:
 
     def add_generated(self, *, b64_json: str, mime: str, prompt: str,
                       owner_user_id: str | None = None) -> dict:
+        try:
+            content = self._decode_image_bytes(b64_json)
+        except ValueError as exc:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=502, detail=str(exc)) from None
+        detected_mime = self._image_media_type(content)
+        if detected_mime != mime:
+            mime = detected_mime
         data_url = f"data:{mime};base64,{b64_json}"
         row = MediaAsset(
             id=uuid4().hex, name=f"生成图：{prompt[:60]}", alt=prompt[:200],
@@ -109,6 +118,10 @@ class MediaService:
         self.db.delete(row)
         self.db.commit()
 
+    SUPPORTED_SIZES = {"512x512", "768x768", "1024x1024", "1024x1536", "1536x1024"}
+    MAX_PROMPT_LENGTH = 16_000
+    MAX_GENERATED_IMAGE_BYTES = 12 * 1024 * 1024
+
     def generate(self, *, prompt: str, size: str = "1024x1024",
                  owner_user_id: str | None = None,
                  image_profile_id: str | None = None) -> dict:
@@ -116,6 +129,14 @@ class MediaService:
         from fastapi import HTTPException
 
         from app.services.model_profile_service import resolve_image_config
+
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="生图提示词不能为空")
+        if len(prompt) > self.MAX_PROMPT_LENGTH:
+            raise HTTPException(status_code=400, detail=f"生图提示词不能超过 {self.MAX_PROMPT_LENGTH} 字符")
+        if size not in self.SUPPORTED_SIZES:
+            raise HTTPException(status_code=400, detail="不支持的生成尺寸")
 
         resolved = resolve_image_config(db=self.db, profile_id=image_profile_id)
         if not resolved["api_key"]:
@@ -160,11 +181,10 @@ class MediaService:
                     status_code=502,
                     detail=f"图片生成成功，但下载结果失败：{exc}",
                 ) from None
-            mime = response.headers.get("content-type", "image/png").split(";", 1)[0].strip()
-            if not mime.startswith("image/") or not response.content:
-                raise HTTPException(status_code=502, detail="图片生成返回的不是有效图片")
-            if len(response.content) > 20 * 1024 * 1024:
-                raise HTTPException(status_code=502, detail="生成的图片超过 20MB，无法入库")
+            try:
+                mime = self._image_media_type(response.content)
+            except ValueError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from None
             return self.add_generated(
                 b64_json=base64.b64encode(response.content).decode("ascii"),
                 mime=mime,
@@ -172,6 +192,54 @@ class MediaService:
                 owner_user_id=owner_user_id,
             )
         raise HTTPException(status_code=502, detail="图片生成没有返回内容")
+
+    @classmethod
+    def _decode_image_bytes(cls, b64_json: str) -> bytes:
+        """校验 provider/base64 返回值：只接受图片 magic bytes，并限制大小。"""
+        import base64
+
+        normalized = (b64_json or "").strip()
+        if normalized.startswith("data:image/"):
+            try:
+                normalized = normalized.split("base64,", 1)[1]
+            except IndexError as exc:
+                raise ValueError("生成的图片 base64 数据无效") from exc
+        normalized = "".join(normalized.split())
+        if not normalized or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", normalized):
+            raise ValueError("生成的图片 base64 数据无效")
+        try:
+            content = base64.b64decode(normalized, validate=True)
+        except Exception as exc:
+            raise ValueError("生成的图片 base64 数据无效") from exc
+        if not content or len(content) > cls.MAX_GENERATED_IMAGE_BYTES:
+            raise ValueError(
+                "生成的图片超过 "
+                f"{cls.MAX_GENERATED_IMAGE_BYTES // (1024 * 1024)}MB，无法入库"
+            )
+        cls._image_media_type(content)
+        return content
+
+    @staticmethod
+    def _image_media_type(content: bytes) -> str:
+        """根据 magic bytes 判断支持的图片类型，避免信任 provider MIME。"""
+        if not content:
+            raise ValueError("图片生成返回了空内容")
+        if len(content) > MediaService.MAX_GENERATED_IMAGE_BYTES:
+            raise ValueError(
+                "生成的图片超过 "
+                f"{MediaService.MAX_GENERATED_IMAGE_BYTES // (1024 * 1024)}MB，无法入库"
+            )
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if content.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
+            return "image/gif"
+        if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+            return "image/webp"
+        if len(content) >= 12 and content[4:8] == b"ftyp" and content[8:12] in (b"avif", b"avis"):
+            return "image/avif"
+        raise ValueError("图片生成返回了不支持的图片格式")
 
     def update(
         self,

@@ -61,6 +61,23 @@ def test_media_upload_rejects_non_data_url(client):
     assert res.status_code == 400
 
 
+def test_generated_image_rejects_bad_payload_and_size():
+    import base64
+
+    import pytest as _pytest
+
+    from app.services.media_service import MediaService
+
+    service = MediaService.__new__(MediaService)
+    # 空文件、非图片文件、超限图片都必须被 magic/size 校验拒绝。
+    with _pytest.raises(Exception):
+        service.add_generated(b64_json=base64.b64encode(b"").decode(), mime="image/png", prompt="p")
+    with _pytest.raises(Exception):
+        service.add_generated(b64_json=base64.b64encode(b"not image").decode(), mime="image/png", prompt="p")
+    with _pytest.raises(Exception):
+        service._decode_image_bytes(base64.b64encode(b"x" * (12 * 1024 * 1024 + 1)).decode())
+
+
 def test_model_status_endpoint(client):
     res = client.get("/api/settings/model")
     assert res.status_code == 200
