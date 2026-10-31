@@ -1,0 +1,10 @@
+/* Decorative canvas only: it never changes card layout or captures form input. */
+.auth-page .auth-card > .specular-frame {
+  position: absolute;
+  inset: -24px;
+  z-index: 3;
+  display: block;
+  width: calc(100% + 48px);
+  height: calc(100% + 48px);
+  pointer-events: none;
+}

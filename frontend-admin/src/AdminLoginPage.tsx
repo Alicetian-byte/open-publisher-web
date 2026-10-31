@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { useAdminAuth } from "./AuthContext";
+import { WhaleLoginBackdrop } from "./components/WhaleLoginBackdrop";
+import SpecularFrame from "./components/SpecularFrame";
+import CursorGrid from "./components/CursorGrid";
+import "./components/LoginBackdrop.css";
+import "./AdminLoginPage.css";
 
 export default function AdminLoginPage() {
   const { login } = useAdminAuth();
@@ -22,13 +27,44 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <main className="admin-login">
+    <main className="admin-login auth-page">
+      <WhaleLoginBackdrop />
       <form
-        className="admin-card"
+        className="admin-card auth-card"
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
         }}>
+        <SpecularFrame
+          radius={18}
+          lineColor="#d8eaff"
+          baseColor="#647f9e"
+          intensity={0.85}
+          idleIntensity={0.2}
+          shineSize={12}
+          shineFade={40}
+          thickness={1.2}
+          glow={0.45}
+          followMouse
+          proximity={220}
+        />
+        <CursorGrid
+          className="auth-card-grid"
+          cellSize={44}
+          color="#b6d9ff"
+          gridColor="#a4bfdc"
+          radius={130}
+          maxOpacity={0.28}
+          fillOpacity={0.035}
+          gridOpacity={0.045}
+          spotlight={0.22}
+          holdTime={180}
+          fadeDuration={1000}
+          edgeFade={0.12}
+          dpr={1.5}
+          clickPulse={false}
+          intro={false}
+        />
         <div className="admin-brand">
           <ShieldCheck size={20} />
           <strong>稿流管理控制台</strong>

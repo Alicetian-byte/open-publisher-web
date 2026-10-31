@@ -1,0 +1,27 @@
+.light-rays {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.light-rays__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Confined to the login backdrop, beneath the interactive manuscript and form. */
+.whale-login-backdrop > .whale-login-backdrop__light-rays {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  /* Fade illumination around the centered card to preserve its visual priority. */
+  -webkit-mask-image: radial-gradient(ellipse 240px 290px at 50% 50%, transparent 30%, #000 100%);
+  mask-image: radial-gradient(ellipse 240px 290px at 50% 50%, transparent 30%, #000 100%);
+}
