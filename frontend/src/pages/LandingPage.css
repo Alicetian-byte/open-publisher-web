@@ -1,0 +1,126 @@
+/* The landing page shares the login artwork without changing workbench styles. */
+.landing-page.landing-page--immersive {
+  position: relative;
+  isolation: isolate;
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  color: #e8f3ff;
+  background: #0b1b31;
+  --ink: #e8f3ff;
+  --ink-soft: #c3d5e7;
+  --muted: #b5c8db;
+  --border: rgb(156 193 234 / 20%);
+}
+.landing-page > .whale-login-backdrop {
+  position: fixed;
+  inset: 0;
+}
+.landing-page > :not(.whale-login-backdrop) { position: relative; z-index: 1; }
+/* Native zoom keeps layout height, hit targets and canvas measurements in sync. */
+.landing-page .landing-content {
+  width: 960px;
+  margin-inline: auto;
+  zoom: var(--landing-scale, 1);
+}
+.landing-page > .whale-login-backdrop::after {
+  background: linear-gradient(180deg, rgb(9 21 40 / 12%), rgb(9 21 40 / 26%) 55%, rgb(9 21 40 / 60%));
+}
+.landing-page .whale-login-backdrop__toggle { bottom: 16px; right: 16px; }
+.landing-page .landing-nav {
+  margin-top: 14px;
+  width: calc(100% - 48px);
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgb(15 30 53 / 72%);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+.landing-page .landing-nav__links { flex-wrap: wrap; justify-content: flex-end; }
+.landing-page .landing-nav__links > button { color: #d1e3f6; }
+.landing-page .landing-nav__links > .button--primary,
+.landing-page .button--primary {
+  border: 1px solid rgb(133 190 247 / 32%);
+  color: #edf7ff;
+  background: #224c78;
+  box-shadow: inset 0 1px rgb(221 238 255 / 12%), 0 6px 20px rgb(8 39 76 / 18%);
+}
+.landing-page .landing-nav__links > .button--primary { padding: 9px 14px; }
+.landing-page .button--quiet { color: #d8e8f8; border-color: var(--border); background: rgb(18 36 63 / 50%); }
+.landing-page button { transition: background 250ms ease-in-out, border-color 250ms ease-in-out, box-shadow 250ms ease-in-out; }
+.landing-page .button--primary:hover { background: #2b608f; box-shadow: 0 8px 25px rgb(70 146 225 / 22%); }
+.landing-page button:focus-visible { outline: 2px solid #b3d6ff; outline-offset: 4px; }
+.landing-page .landing-hero { padding-top: 42px; padding-bottom: 30px; }
+.landing-hero__panel {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  gap: 18px;
+  justify-items: start;
+  width: 100%;
+  min-width: 0;
+  padding: 46px;
+  border: 1px solid rgb(120 180 255 / 18%);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgb(20 40 80 / 64%), rgb(15 25 50 / 78%));
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 32px rgb(2 8 25 / 16%), inset 0 1px rgb(220 235 255 / 9%);
+}
+.landing-hero__panel > .specular-frame {
+  position: absolute;
+  z-index: 2;
+  inset: -24px;
+  width: calc(100% + 48px);
+  height: calc(100% + 48px);
+  display: block;
+  pointer-events: none;
+}
+.landing-page .page-kicker { color: #c5d8ee; letter-spacing: 0.15em; font-size: 11px; }
+.landing-page .landing-hero h1 { color: #eff7ff; font-size: 46px; line-height: 1.3; text-wrap: balance; }
+.landing-page .landing-features { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.landing-page .landing-hero__sub { color: #c0d1e3; }
+.landing-page .landing-feature,
+.landing-page .landing-flow li {
+  background: linear-gradient(180deg, rgb(20 40 69 / 82%), rgb(15 27 48 / 88%));
+  border-color: rgb(140 185 232 / 20%);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px rgb(220 235 255 / 5%);
+  transition: border-color 350ms ease-in-out, box-shadow 350ms ease-in-out, transform 350ms ease-in-out;
+}
+.landing-page .landing-feature svg { color: #b7d7fa; }
+.landing-page .landing-feature p,
+.landing-page .landing-flow li span { color: #b9ccdf; }
+.landing-page .landing-flow h2 {
+  justify-self: start;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: rgb(15 27 48 / 88%);
+}
+.landing-page .landing-flow li::before { background: #284f7a; color: #dfefff; }
+.landing-page .landing-flow > .button { justify-self: start; }
+.landing-page .landing-footer {
+  width: calc(100% - 48px);
+  margin-bottom: 64px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: rgb(15 27 48 / 88%);
+  color: #c0d1e3;
+}
+.landing-page .landing-footer button { color: #c0d1e3; }
+@media (hover: hover) and (pointer: fine) {
+  .landing-page .landing-feature:hover,
+  .landing-page .landing-flow li:hover {
+    transform: translateY(-3px);
+    border-color: rgb(173 211 255 / 48%);
+    box-shadow: 0 8px 28px rgb(5 18 38 / 20%), inset 0 1px rgb(220 235 255 / 10%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .landing-page button,
+  .landing-page .landing-feature,
+  .landing-page .landing-flow li { transition: none; transform: none; }
+}
