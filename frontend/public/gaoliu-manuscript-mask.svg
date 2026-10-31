@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="562" viewBox="0 0 1000 562">
+  <!-- Matches the visible curling manuscript bands; displacement remains subtle. -->
+  <defs><filter id="soft"><feMorphology operator="dilate" radius="9"/><feGaussianBlur stdDeviation="7"/></filter></defs>
+  <g fill="none" stroke="white" stroke-width="34" stroke-linecap="round" filter="url(#soft)">
+    <path d="M 190 -34 C 244 64 348 111 468 190 C 580 264 669 282 731 203 C 802 112 700 91 620 142 C 536 196 560 273 704 326 C 814 368 904 330 1035 267"/>
+    <path d="M 422 -38 C 376 82 466 133 573 176 C 710 232 756 309 685 377 C 600 458 457 385 374 337 C 285 285 217 351 156 492"/>
+  </g>
+</svg>

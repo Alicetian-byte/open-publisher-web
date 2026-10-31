@@ -1,0 +1,94 @@
+/* All refinements are scoped to the login card; the workbench keeps its styles. */
+.auth-page .auth-card { isolation: isolate; }
+/* Keep the cursor-reactive canvas beneath every form control. */
+.auth-page .auth-card > .auth-card-grid {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.auth-page .auth-card {
+  margin-left: auto;
+  margin-right: auto;
+  width: min(370px, calc(100vw - 40px));
+  max-width: 370px;
+}
+@media (max-width: 900px) {
+  .auth-page .auth-card {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
+.auth-page .auth-card {
+  gap: 15px;
+  padding: 26px;
+  border: 1px solid rgba(120, 180, 255, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(to bottom, rgba(20, 40, 80, 0.35), rgba(15, 25, 50, 0.45));
+  box-shadow: 0 10px 32px rgb(2 8 25 / 16%), 0 0 14px rgb(120 160 255 / 5%), inset 0 1px 0 rgb(220 235 255 / 9%), inset 0 -1px 8px rgb(4 10 30 / 8%);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+.auth-page .auth-brand { gap: 10px; }
+.auth-page .auth-brand strong { font-size: 23px; letter-spacing: 0.04em; }
+.auth-page .auth-brand span { font-size: 11px; letter-spacing: 0.04em; }
+.auth-page .auth-card h1 { margin: 2px 0 0; font-size: 20px; font-weight: 550; letter-spacing: 0.04em; }
+.auth-page .auth-card > .muted { margin: -3px 0 2px; font-size: 12px; line-height: 1.8; color: #a5bbd2; }
+.auth-page .auth-form { gap: 18px; min-width: 0; }
+.auth-page .auth-form label { min-width: 0; gap: 8px; }
+.auth-page .auth-form label > span { color: #aec4da; font-size: 12px; }
+.auth-page .auth-form input:not(.code-slots__input) {
+  min-width: 0;
+  height: 44px;
+  padding: 0 13px;
+  border-radius: 9px;
+  background: rgb(4 14 33 / 45%);
+  transition: border-color 200ms ease-in-out, box-shadow 200ms ease-in-out;
+}
+.auth-page .auth-card input:not(.code-slots__input):autofill {
+  -webkit-text-fill-color: #e9f7ff;
+  box-shadow: inset 0 0 0 100px #172d4c;
+  caret-color: #e9f7ff;
+}
+.auth-page .code-slots { display: block; min-width: 0; }
+.auth-page .code-slots__row { width: 100%; gap: var(--code-slot-gap); }
+.auth-page .code-slots__slot { flex: 1 1 0; min-width: 0; height: 44px; }
+.auth-page .code-slots__count { position: absolute; right: 0; top: -23px; font-size: 10px; color: #93abc4; }
+.auth-page .auth-card .code-slots__fill { background: #dbe9f7; }
+.auth-page .auth-card .code-slots__digit { color: #1b3550; }
+.auth-page .auth-login-action { display: grid; gap: 10px; min-width: 0; margin-top: 2px; }
+.auth-page .auth-card .auth-login-button {
+  display: grid;
+  width: 100%;
+  height: 50px;
+  margin: 0;
+  border: 1px solid rgb(132 192 250 / 31%);
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: 0.07em;
+  --hb-shadow: inset 0 1px rgb(207 233 255 / 12%), 0 8px 22px rgb(13 81 145 / 20%);
+  --hb-glow: inset 0 1px rgb(223 242 255 / 17%), 0 8px 26px rgb(54 143 226 / 28%);
+}
+.auth-page .auth-login-button span { color: inherit; font-size: inherit; }
+.auth-page .auth-login-button .hold-button__label--fill { color: var(--hb-fill-text); }
+.auth-page .auth-login-button:disabled { opacity: 0.85; cursor: wait; }
+.auth-page .auth-login-hint { margin: 0; font-size: 10px; line-height: 1.6; text-align: center; color: #8ba5bf; }
+.auth-page .auth-register-button { min-height: 46px; border-radius: 11px; }
+.auth-page .auth-switch { justify-self: center; padding: 3px 0; font-size: 12px; transition: color 200ms ease-in-out; }
+.auth-page .auth-switch:disabled { opacity: 0.5; cursor: wait; }
+.auth-page .auth-error { font-size: 12px; line-height: 1.6; }
+.auth-login-spinner { animation: auth-login-spin 1.1s linear infinite; }
+@keyframes auth-login-spin { to { transform: rotate(360deg); } }
+@media (max-width: 480px) {
+  .auth-page { padding: 18px; }
+  .auth-page .auth-card { padding: 24px 20px; border-radius: 18px; gap: 16px; }
+  .auth-page .auth-form { gap: 16px; }
+  .auth-page .code-slots__row { gap: 5px; }
+  .auth-page .code-slots__slot { height: 40px; }
+  .auth-page .auth-login-hint { font-size: 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-page .auth-login-spinner { animation: none; }
+}

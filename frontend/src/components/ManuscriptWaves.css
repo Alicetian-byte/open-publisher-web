@@ -1,0 +1,9 @@
+/* A single displaced copy of the image preserves the original composition. */
+.whale-login-backdrop__art > .manuscript-float {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
